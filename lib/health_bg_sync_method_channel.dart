@@ -7,9 +7,24 @@ import 'health_bg_sync_platform_interface.dart';
 class MethodChannelHealthBgSync extends HealthBgSyncPlatform {
   static const MethodChannel _channel = MethodChannel('health_bg_sync');
 
+  static const EventChannel _logChannel = EventChannel('health_bg_sync/logs');
+
   @override
   Future<void> initialize(Map<String, dynamic> config) async {
     await _channel.invokeMethod<void>('initialize', config);
+    
+    // Automatically listen to logs if enabled
+    final listenToLogs = config['listenToLogs'] as bool? ?? true;
+    if (listenToLogs) {
+      _logChannel.receiveBroadcastStream().listen(
+        (dynamic event) {
+          print('[HealthSync] $event');
+        },
+        onError: (error) {
+          // Silently ignore stream errors
+        },
+      );
+    }
   }
 
   @override
@@ -19,8 +34,9 @@ class MethodChannelHealthBgSync extends HealthBgSyncPlatform {
   }
 
   @override
-  Future<void> startBackgroundSync() async {
-    await _channel.invokeMethod<void>('startBackgroundSync');
+  Future<bool> startBackgroundSync() async {
+    final res = await _channel.invokeMethod<bool>('startBackgroundSync');
+    return res == true;
   }
 
   @override

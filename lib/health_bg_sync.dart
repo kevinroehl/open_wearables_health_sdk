@@ -18,6 +18,7 @@ class HealthBgSync {
     required List<HealthDataType> types,
     int chunkSize = 1000, // Default chunk size to prevent HTTP 413 errors
     int recordsPerChunk = 10000, // Default records per HTTP request to prevent timeouts (~2-3MB per chunk)
+    bool listenToLogs = true, // Automatically listen to and print logs from native plugin
   }) async {
     // Touch the registration so it's tree-shake-proof.
     assert(_hbgsRegistered, 'MethodChannel not registered');
@@ -27,6 +28,7 @@ class HealthBgSync {
       'types': types.map((e) => e.id).toList(growable: false),
       'chunkSize': chunkSize,
       'recordsPerChunk': recordsPerChunk,
+      'listenToLogs': listenToLogs,
     });
   }
 
@@ -40,9 +42,9 @@ class HealthBgSync {
     await _platform.syncNow();
   }
 
-  static Future<void> startBackgroundSync() async {
+  static Future<bool> startBackgroundSync() async {
     assert(_hbgsRegistered);
-    await _platform.startBackgroundSync();
+    return _platform.startBackgroundSync();
   }
 
   static Future<void> stopBackgroundSync() async {

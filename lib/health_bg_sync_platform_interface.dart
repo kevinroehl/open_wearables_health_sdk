@@ -36,7 +36,8 @@ abstract class HealthBgSyncPlatform extends PlatformInterface {
   /// Starts background sync:
   /// - Registers ObserverQuery + enables background delivery.
   /// - Performs a full export for types without anchor and incremental for others.
-  Future<void> startBackgroundSync() {
+  /// Returns true if sync started successfully, false otherwise.
+  Future<bool> startBackgroundSync() {
     throw UnimplementedError('startBackgroundSync() has not been implemented.');
   }
 

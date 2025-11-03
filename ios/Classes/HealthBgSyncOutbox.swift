@@ -85,24 +85,24 @@ extension HealthBgSyncPlugin {
         completion: @escaping (Bool)->Void
     ) {
         // 1) payload → file
-        guard let data = try? JSONSerialization.data(withJSONObject: payload) else { 
-            print("❌ Failed to serialize payload to JSON")
-            completion(false)
-            return 
-        }
-        
-        let id = UUID().uuidString
-        let payloadURL = newPath("combined_payload_\(id)", ext: "json")
-        
-        do { 
-            try data.write(to: payloadURL, options: Data.WritingOptions.atomic)
-            let fileSizeMB = Double(data.count) / (1024 * 1024)
-            print("✅ Created payload file: \(String(format: "%.2f", fileSizeMB)) MB (\(data.count) bytes)")
-        } catch { 
-            print("❌ Failed to write payload file: \(error.localizedDescription)")
-            completion(false)
-            return 
-        }
+                guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
+                    self.logMessage("❌ Failed to serialize payload to JSON")
+                    completion(false)
+                    return
+                }
+                
+                let id = UUID().uuidString
+                let payloadURL = newPath("combined_payload_\(id)", ext: "json")
+                
+                do {
+                    try data.write(to: payloadURL, options: Data.WritingOptions.atomic)
+                    let fileSizeMB = Double(data.count) / (1024 * 1024)
+                    self.logMessage("✅ Created payload file: \(String(format: "%.2f", fileSizeMB)) MB (\(data.count) bytes)")
+                } catch {
+                    self.logMessage("❌ Failed to write payload file: \(error.localizedDescription)")
+                    completion(false)
+                    return
+                }
 
         // 2) anchors → file (for all types) - serialize as binary data
         var anchorsURL: URL? = nil
@@ -134,46 +134,46 @@ extension HealthBgSyncPlugin {
         let itemURL = newPath("combined_item_\(id)", ext: "json")
         if let md = try? JSONEncoder().encode(item) { try? md.write(to: itemURL, options: Data.WritingOptions.atomic) }
 
-        // 4) Read file into memory for immediate upload
-        guard let payloadData = try? Data(contentsOf: payloadURL) else {
-            print("❌ Failed to read payload file")
-            completion(false)
-            return
-        }
-        
-        // 5) Create request with data as body for immediate upload
-        var req = URLRequest(url: endpoint)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.httpBody = payloadData
-        req.setValue("\(payloadData.count)", forHTTPHeaderField: "Content-Length")
-        
-        print("📤 Starting immediate upload to \(endpoint.absoluteString) (payload: \(payloadData.count) bytes)")
+                // 4) Read file into memory for immediate upload
+                guard let payloadData = try? Data(contentsOf: payloadURL) else {
+                    self.logMessage("❌ Failed to read payload file")
+                    completion(false)
+                    return
+                }
+                
+                // 5) Create request with data as body for immediate upload
+                var req = URLRequest(url: endpoint)
+                req.httpMethod = "POST"
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                req.httpBody = payloadData
+                req.setValue("\(payloadData.count)", forHTTPHeaderField: "Content-Length")
+                
+                self.logMessage("📤 Starting immediate upload to \(endpoint.absoluteString) (payload: \(payloadData.count) bytes)")
         
         // Use dataTask for immediate execution with completion handler
         let task = foregroundSession.dataTask(with: req) { [weak self] data, response, error in
             guard let self = self else { return }
             
-            // Handle response
-            if let error = error {
-                let nsError = error as NSError
-                if nsError.code != NSURLErrorCancelled {
-                    print("❌ Upload error: \(error.localizedDescription)")
-                } else {
-                    print("ℹ️ Upload was cancelled")
-                }
+                    // Handle response
+                    if let error = error {
+                        let nsError = error as NSError
+                        if nsError.code != NSURLErrorCancelled {
+                            self.logMessage("❌ Upload error: \(error.localizedDescription)")
+                        } else {
+                            self.logMessage("ℹ️ Upload was cancelled")
+                        }
                 // Clean up on error
                 try? FileManager.default.removeItem(atPath: payloadURL.path)
                 completion(false)
                 return
             }
             
-            if let httpResponse = response as? HTTPURLResponse {
-                print("📥 HTTP Response: \(httpResponse.statusCode) for \(endpoint.absoluteString)")
-                
-                if (200...299).contains(httpResponse.statusCode) {
-                    print("✅ Upload successful (HTTP \(httpResponse.statusCode))")
+                    if let httpResponse = response as? HTTPURLResponse {
+                        self.logMessage("📥 HTTP Response: \(httpResponse.statusCode) for \(endpoint.absoluteString)")
+                        
+                        if (200...299).contains(httpResponse.statusCode) {
+                            self.logMessage("✅ Upload successful (HTTP \(httpResponse.statusCode))")
                     
                     // Save anchors after successful upload (only on last chunk)
                     self.handleSuccessfulUpload(itemPath: itemURL.path, anchorPath: anchorsURL?.path, wasFullExport: wasFullExport)

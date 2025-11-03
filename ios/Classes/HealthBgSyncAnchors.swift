@@ -41,18 +41,37 @@ extension HealthBgSyncPlugin {
     }
 
     // MARK: - Initial sync plan
-    internal func initialSyncKickoff(completion: @escaping ()->Void) {
+    internal func initialSyncKickoff(completion: @escaping (Bool)->Void) {
+        // Check prerequisites for starting sync
+        guard HKHealthStore.isHealthDataAvailable() else {
+            logMessage("❌ HealthKit data not available, cannot start sync")
+            completion(false)
+            return
+        }
+        
+        guard endpoint != nil, token != nil else {
+            logMessage("❌ Endpoint or token not set, cannot start sync")
+            completion(false)
+            return
+        }
+        
+        guard !trackedTypes.isEmpty else {
+            logMessage("❌ No tracked types configured, cannot start sync")
+            completion(false)
+            return
+        }
+        
         let fullDone = defaults.bool(forKey: fullDoneKey())
         if fullDone {
             // Endpoint already completed full export → do incremental only
-            print("✅ Full export already done, performing incremental sync only")
-            syncAll(fullExport: false, completion: completion)
+            logMessage("✅ Full export already done, performing incremental sync only")
+            syncAll(fullExport: false, completion: { completion(true) })
         } else {
             // First time for this endpoint → perform full export
             // Note: fullDone will be marked true AFTER successful upload (in URLSessionDelegate)
-            print("🔄 First time sync for this endpoint, performing full export")
+            logMessage("🔄 First time sync for this endpoint, performing full export")
             isInitialSyncInProgress = true
-            syncAll(fullExport: true, completion: completion)
+            syncAll(fullExport: true, completion: { completion(true) })
         }
     }
 }

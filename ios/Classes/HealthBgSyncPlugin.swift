@@ -3,7 +3,7 @@ import UIKit
 import HealthKit
 import BackgroundTasks
 
-public class HealthBgSyncPlugin: NSObject, FlutterPlugin, URLSessionDelegate, URLSessionTaskDelegate {
+public class HealthBgSyncPlugin: NSObject, FlutterPlugin, FlutterStreamHandler, URLSessionDelegate, URLSessionTaskDelegate {
 
     // MARK: - State
     internal let healthStore = HKHealthStore()
@@ -41,12 +41,21 @@ public class HealthBgSyncPlugin: NSObject, FlutterPlugin, URLSessionDelegate, UR
 
     // AppDelegate will pass its background completion handler here
     internal static var bgCompletionHandler: (() -> Void)?
+    
+    // Event channel for streaming logs to Flutter
+    private var logEventSink: FlutterEventSink?
+    private var logEventChannel: FlutterEventChannel?
 
     // MARK: - Flutter registration
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(name: "health_bg_sync", binaryMessenger: registrar.messenger())
         let instance = HealthBgSyncPlugin()
         registrar.addMethodCallDelegate(instance, channel: channel)
+        
+        // Set up event channel for logs
+        let logChannel = FlutterEventChannel(name: "health_bg_sync/logs", binaryMessenger: registrar.messenger())
+        instance.logEventChannel = logChannel
+        logChannel.setStreamHandler(instance)
     }
 
     // Call from AppDelegate.handleEventsForBackgroundURLSession
@@ -108,8 +117,10 @@ public class HealthBgSyncPlugin: NSObject, FlutterPlugin, URLSessionDelegate, UR
             if let recordsPerChunkArg = args["recordsPerChunk"] as? Int, recordsPerChunkArg > 0 {
                 self.recordsPerChunk = recordsPerChunkArg
             }
+            
+            // Note: listenToLogs is handled on Flutter side, no action needed here
 
-            print("✅ Initialized for endpointKey=\(endpointKey()) types=\(trackedTypes.map{$0.identifier}) chunkSize=\(chunkSize) recordsPerChunk=\(recordsPerChunk)")
+            logMessage("✅ Initialized for endpointKey=\(endpointKey()) types=\(trackedTypes.map{$0.identifier}) chunkSize=\(chunkSize) recordsPerChunk=\(recordsPerChunk)")
 
             // Retry pending outbox items (if any)
             retryOutboxIfPossible()
@@ -130,16 +141,28 @@ public class HealthBgSyncPlugin: NSObject, FlutterPlugin, URLSessionDelegate, UR
             self.startBackgroundDelivery()
             
             // Perform initial full sync if not done yet (will be incremental after first sync)
-            self.initialSyncKickoff {
-                print("✅ Initial sync completed")
-                // Clear the flag after initial sync completes
-                self.isInitialSyncInProgress = false
+            self.initialSyncKickoff { started in
+                if started {
+                    self.logMessage("✅ Initial sync started successfully")
+                } else {
+                    self.logMessage("❌ Initial sync failed to start")
+                    // Clear the flag if sync didn't start
+                    self.isInitialSyncInProgress = false
+                }
+                // Note: isInitialSyncInProgress will be cleared in collectAllData completion
             }
             
             // Schedule fallback BG tasks for catch-up syncing
             self.scheduleAppRefresh()
             self.scheduleProcessing()
-            result(nil)
+            
+            // Return true immediately if prerequisites are met, false otherwise
+            // We check prerequisites here to return synchronously
+            let canStart = HKHealthStore.isHealthDataAvailable() && 
+                          self.endpoint != nil && 
+                          self.token != nil && 
+                          !self.trackedTypes.isEmpty
+            result(canStart)
 
         case "stopBackgroundSync":
             self.stopBackgroundDelivery()
@@ -183,14 +206,14 @@ public class HealthBgSyncPlugin: NSObject, FlutterPlugin, URLSessionDelegate, UR
     internal func triggerCombinedSync() {
         // Skip if initial sync is already in progress to prevent duplicates
         if isInitialSyncInProgress {
-            print("⏭️ Skipping observer sync - initial sync in progress")
+            logMessage("⏭️ Skipping observer sync - initial sync in progress")
             return
         }
         
         // Start background task if not already started
         if observerBgTask == .invalid {
             observerBgTask = UIApplication.shared.beginBackgroundTask(withName: "health_combined_sync") {
-                print("⚠️ Observer background task expired")
+                self.logMessage("⚠️ Observer background task expired")
                 UIApplication.shared.endBackgroundTask(self.observerBgTask)
                 self.observerBgTask = .invalid
             }
@@ -227,7 +250,7 @@ public class HealthBgSyncPlugin: NSObject, FlutterPlugin, URLSessionDelegate, UR
         // Prevent concurrent syncs
         syncLock.lock()
         if isSyncing {
-            print("⚠️ Sync already in progress, skipping duplicate sync")
+            logMessage("⚠️ Sync already in progress, skipping duplicate sync")
             syncLock.unlock()
             completion()
             return
@@ -237,7 +260,7 @@ public class HealthBgSyncPlugin: NSObject, FlutterPlugin, URLSessionDelegate, UR
         
         // Check HealthKit authorization status
         guard HKHealthStore.isHealthDataAvailable() else {
-            print("❌ HealthKit data not available")
+            logMessage("❌ HealthKit data not available")
             syncLock.lock()
             isSyncing = false
             isInitialSyncInProgress = false
@@ -246,7 +269,7 @@ public class HealthBgSyncPlugin: NSObject, FlutterPlugin, URLSessionDelegate, UR
             return
         }
         
-        print("🔄 Starting data collection (fullExport: \(fullExport), isBackground: \(isBackground))")
+        logMessage("🔄 Starting data collection (fullExport: \(fullExport), isBackground: \(isBackground))")
         
         let allSamples = NSMutableArray()
         let allAnchors = NSMutableDictionary()
@@ -261,11 +284,11 @@ public class HealthBgSyncPlugin: NSObject, FlutterPlugin, URLSessionDelegate, UR
             let anchor = fullExport ? nil : loadAnchor(for: type)
             
             if fullExport {
-                print("📥 Full export: fetching all data for \(type.identifier)")
+                logMessage("📥 Full export: fetching all data for \(type.identifier)")
             } else if let anchor = anchor {
-                print("📥 Incremental sync: fetching new data since anchor for \(type.identifier)")
+                logMessage("📥 Incremental sync: fetching new data since anchor for \(type.identifier)")
             } else {
-                print("📥 No anchor found for \(type.identifier), fetching all data (will be treated as full export)")
+                logMessage("📥 No anchor found for \(type.identifier), fetching all data (will be treated as full export)")
             }
             
             // For incremental sync, we still want all new data, but anchored queries only return new samples
@@ -278,13 +301,13 @@ public class HealthBgSyncPlugin: NSObject, FlutterPlugin, URLSessionDelegate, UR
                 }
                 
                 if let error = error {
-                    print("❌ Query error for \(type.identifier): \(error.localizedDescription)")
+                    self.logMessage("❌ Query error for \(type.identifier): \(error.localizedDescription)")
                     group.leave()
                     return 
                 }
                 
                 let samples = samplesOrNil ?? []
-                print("✅ Query completed for \(type.identifier): got \(samples.count) samples")
+                self.logMessage("✅ Query completed for \(type.identifier): got \(samples.count) samples")
                 
                 // Thread-safe access to shared data
                 lock.lock()
@@ -299,12 +322,12 @@ public class HealthBgSyncPlugin: NSObject, FlutterPlugin, URLSessionDelegate, UR
                 group.leave()
             }
             
-            print("▶️ Executing query for \(type.identifier)")
+            logMessage("▶️ Executing query for \(type.identifier)")
             healthStore.execute(query)
         }
         
         // Use notify instead of wait to avoid blocking the main thread
-        print("⏳ Waiting for \(trackedTypes.count) queries to complete...")
+        logMessage("⏳ Waiting for \(trackedTypes.count) queries to complete...")
         group.notify(queue: .main) { [weak self] in
             guard let self = self else { 
                 print("⚠️ group.notify: self is nil")
@@ -312,7 +335,7 @@ public class HealthBgSyncPlugin: NSObject, FlutterPlugin, URLSessionDelegate, UR
                 return 
             }
             
-            print("✅ All queries completed. Total samples collected: \(allSamples.count)")
+            logMessage("✅ All queries completed. Total samples collected: \(allSamples.count)")
             
             // Reset sync flags
             self.syncLock.lock()
@@ -322,7 +345,7 @@ public class HealthBgSyncPlugin: NSObject, FlutterPlugin, URLSessionDelegate, UR
             
             // If no data, we're done
             guard allSamples.count > 0 else { 
-                print("ℹ️ No samples to send")
+                self.logMessage("ℹ️ No samples to send")
                 completion()
                 return 
             }
@@ -337,14 +360,14 @@ public class HealthBgSyncPlugin: NSObject, FlutterPlugin, URLSessionDelegate, UR
                 }
             }
             
-            print("📦 Collected \(samples.count) total samples from \(self.trackedTypes.count) types")
+            logMessage("📦 Collected \(samples.count) total samples from \(self.trackedTypes.count) types")
             
             // Split samples into chunks to prevent timeout
             let chunks = samples.chunked(into: self.recordsPerChunk)
-            print("📦 Split into \(chunks.count) chunk(s) of max \(self.recordsPerChunk) records each")
+            logMessage("📦 Split into \(chunks.count) chunk(s) of max \(self.recordsPerChunk) records each")
             
             if chunks.isEmpty {
-                print("ℹ️ No data to send")
+                logMessage("ℹ️ No data to send")
                 self.syncLock.lock()
                 self.isSyncing = false
                 self.isInitialSyncInProgress = false
@@ -394,13 +417,13 @@ public class HealthBgSyncPlugin: NSObject, FlutterPlugin, URLSessionDelegate, UR
         let chunk = chunks[chunkIndex]
         let isLastChunk = (chunkIndex == chunks.count - 1)
         
-        print("📤 Sending chunk \(chunkIndex + 1)/\(totalChunks) (\(chunk.count) records)...")
+        logMessage("📤 Sending chunk \(chunkIndex + 1)/\(totalChunks) (\(chunk.count) records)...")
         
         // Serialize this chunk
         let startTime = Date()
         let payload = self.serializeCombined(samples: chunk, anchors: isLastChunk ? anchors : [:])
         let serializationTime = Date().timeIntervalSince(startTime)
-        print("✅ Serialized chunk \(chunkIndex + 1) in \(String(format: "%.2f", serializationTime)) seconds")
+        logMessage("✅ Serialized chunk \(chunkIndex + 1) in \(String(format: "%.2f", serializationTime)) seconds")
         
         // Send this chunk - only mark fullDone on last chunk
         let wasFullExport = fullExport && isLastChunk
@@ -412,7 +435,7 @@ public class HealthBgSyncPlugin: NSObject, FlutterPlugin, URLSessionDelegate, UR
             }
             
             if success {
-                print("✅ Chunk \(chunkIndex + 1)/\(totalChunks) sent successfully")
+                self.logMessage("✅ Chunk \(chunkIndex + 1)/\(totalChunks) sent successfully")
                 // Send next chunk
                 self.sendChunksSequentially(
                     chunks: chunks,
@@ -425,7 +448,7 @@ public class HealthBgSyncPlugin: NSObject, FlutterPlugin, URLSessionDelegate, UR
                     completion: completion
                 )
             } else {
-                print("❌ Chunk \(chunkIndex + 1)/\(totalChunks) failed, stopping")
+                self.logMessage("❌ Chunk \(chunkIndex + 1)/\(totalChunks) failed, stopping")
                 completion()
             }
         }
@@ -500,9 +523,33 @@ public class HealthBgSyncPlugin: NSObject, FlutterPlugin, URLSessionDelegate, UR
         // Wait with timeout
         let result = group.wait(timeout: .now() + timeout)
         if result == .timedOut {
-            print("⚠️ Sync timeout for \(type.identifier)")
+            logMessage("⚠️ Sync timeout for \(type.identifier)")
         }
         completion()
+    }
+    
+    // MARK: - Logging
+    internal func logMessage(_ message: String) {
+        // Always print to Xcode console
+        print(message)
+        
+        // Also send to Flutter if event sink is available
+        if let sink = logEventSink {
+            DispatchQueue.main.async { [weak self] in
+                sink(message)
+            }
+        }
+    }
+    
+    // MARK: - FlutterStreamHandler (for logs)
+    public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+        logEventSink = events
+        return nil
+    }
+    
+    public func onCancel(withArguments arguments: Any?) -> FlutterError? {
+        logEventSink = nil
+        return nil
     }
 }
 
