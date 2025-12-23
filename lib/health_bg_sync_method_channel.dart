@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'health_bg_sync_platform_interface.dart';
@@ -20,10 +21,10 @@ class MethodChannelHealthBgSync extends HealthBgSyncPlatform {
     if (!_logsListenerAttached) {
       _logsListenerAttached = true;
       _logChannel.receiveBroadcastStream().listen((dynamic event) {
-        print('[HealthBgSync] $event');
+        debugPrint('[HealthBgSync] $event');
       }, onError: (error) {});
     }
-    
+
     // Check if sync was auto-restored by querying isSyncActive
     final isSyncActive = await _channel.invokeMethod<bool>('isSyncActive');
     return isSyncActive == true;
@@ -32,10 +33,7 @@ class MethodChannelHealthBgSync extends HealthBgSyncPlatform {
   @override
   Future<void> signIn({required String userId, required String accessToken}) async {
     try {
-      await _channel.invokeMethod<void>('signIn', {
-        'userId': userId,
-        'accessToken': accessToken,
-      });
+      await _channel.invokeMethod<void>('signIn', {'userId': userId, 'accessToken': accessToken});
     } on PlatformException catch (e) {
       throw SignInException(e.message ?? 'Sign-in failed', statusCode: int.tryParse(e.code));
     }
