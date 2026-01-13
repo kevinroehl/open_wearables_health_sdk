@@ -10,7 +10,9 @@ extension HealthBgSyncPlugin {
         for q in activeObserverQueries { healthStore.stop(q) }
         activeObserverQueries.removeAll()
 
-        for type in trackedTypes {
+        let observableTypes = getQueryableTypes()
+
+        for type in observableTypes {
             let observer = HKObserverQuery(sampleType: type, predicate: nil) { [weak self] _, completionHandler, error in
                 guard let self = self else { 
                     completionHandler()
@@ -30,13 +32,16 @@ extension HealthBgSyncPlugin {
             activeObserverQueries.append(observer)
             healthStore.enableBackgroundDelivery(for: type, frequency: .immediate) { _, _ in }
         }
-        logMessage("📡 Background observers registered for \(trackedTypes.count) types")
+        logMessage("📡 Background observers registered for \(observableTypes.count) types")
     }
 
     internal func stopBackgroundDelivery() {
         for q in activeObserverQueries { healthStore.stop(q) }
         activeObserverQueries.removeAll()
-        for t in trackedTypes { 
+        
+        let observableTypes = getQueryableTypes()
+        
+        for t in observableTypes { 
             healthStore.disableBackgroundDelivery(for: t) { _, _ in } 
         }
         logMessage("🔌 Background observers stopped")

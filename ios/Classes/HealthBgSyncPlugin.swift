@@ -343,6 +343,19 @@ import BackgroundTasks
         return accessToken
     }
     
+    // MARK: - Helper: Get queryable types (filtering unsupported correlations)
+    internal func getQueryableTypes() -> [HKSampleType] {
+        // Filter out correlation types that cannot be used in authorization or queries
+        // These should be accessed via their individual components instead
+        let disallowedIdentifiers: Set<String> = [
+            HKCorrelationTypeIdentifier.bloodPressure.rawValue
+        ]
+        
+        return trackedTypes.filter { type in
+            !disallowedIdentifiers.contains(type.identifier)
+        }
+    }
+    
     // MARK: - Token Refresh
     internal func refreshTokenIfNeeded(completion: @escaping (Bool) -> Void) {
         // Check if token is expired
@@ -419,11 +432,12 @@ import BackgroundTasks
             return 
         }
         
-        let types = Set(trackedTypes)
+        let readTypes = Set(getQueryableTypes())
         
-        logMessage("📡 Requesting read/write auth for \(types.count) types")
+        logMessage("📡 Requesting read-only auth for \(readTypes.count) types")
         
-        healthStore.requestAuthorization(toShare: types, read: types) { ok, _ in
+        // Request only read permissions (no write/share)
+        healthStore.requestAuthorization(toShare: nil, read: readTypes) { ok, _ in
             DispatchQueue.main.async { completion(ok) }
         }
     }
@@ -509,12 +523,14 @@ import BackgroundTasks
         
         logMessage("🔄 Collecting data (fullExport: \(fullExport))")
         
+        let queryableTypes = getQueryableTypes()
+        
         let allSamples = NSMutableArray()
         let allAnchors = NSMutableDictionary()
         let group = DispatchGroup()
         let lock = NSLock()
         
-        for type in trackedTypes {
+        for type in queryableTypes {
             group.enter()
             let anchor = fullExport ? nil : loadAnchor(for: type)
             

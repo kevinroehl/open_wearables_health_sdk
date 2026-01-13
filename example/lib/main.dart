@@ -1,9 +1,10 @@
 import 'dart:convert';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:health_bg_sync/health_bg_sync.dart';
 import 'package:health_bg_sync/health_data_type.dart';
+import 'package:http/http.dart' as http;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -11,8 +12,9 @@ void main() async {
   runApp(const MyApp());
 }
 
-// Simple in-memory logs
+// Simple in-memory logs (limited to 1000 entries for performance)
 final List<String> appLogs = [];
+const int _maxLogEntries = 1000;
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -23,10 +25,7 @@ class MyApp extends StatelessWidget {
       title: 'Health Sync',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFFFF2D55),
-          brightness: Brightness.light,
-        ),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFFF2D55), brightness: Brightness.light),
         scaffoldBackgroundColor: const Color(0xFFF2F2F7),
         appBarTheme: const AppBarTheme(
           backgroundColor: Color(0xFFF2F2F7),
@@ -54,9 +53,7 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final _customUrlController = TextEditingController(
-    text: 'https://api.openwearables.io',
-  );
+  final _customUrlController = TextEditingController(text: 'https://api.openwearables.io');
   final _userIdController = TextEditingController();
   final _appIdController = TextEditingController();
   final _appSecretController = TextEditingController();
@@ -78,14 +75,13 @@ class _HomePageState extends State<HomePage> {
 
   void _subscribeToNativeLogs() {
     MethodChannelHealthBgSync.logStream.listen((message) {
-      final timestamp = DateTime.now()
-          .toIso8601String()
-          .split('T')
-          .last
-          .split('.')
-          .first;
+      final timestamp = DateTime.now().toIso8601String().split('T').last.split('.').first;
       setState(() {
         appLogs.add('$timestamp $message');
+        // Keep only the last N entries to prevent memory/performance issues
+        if (appLogs.length > _maxLogEntries) {
+          appLogs.removeRange(0, appLogs.length - _maxLogEntries);
+        }
       });
     });
   }
@@ -104,12 +100,8 @@ class _HomePageState extends State<HomePage> {
     setState(() => _isLoading = true);
     try {
       final credentials = await HealthBgSync.getStoredCredentials();
-      final hasUserId =
-          credentials['userId'] != null &&
-          (credentials['userId'] as String).isNotEmpty;
-      final hasAccessToken =
-          credentials['accessToken'] != null &&
-          (credentials['accessToken'] as String).isNotEmpty;
+      final hasUserId = credentials['userId'] != null && (credentials['userId'] as String).isNotEmpty;
+      final hasAccessToken = credentials['accessToken'] != null && (credentials['accessToken'] as String).isNotEmpty;
       final wasSyncActive = credentials['isSyncActive'] == true;
 
       setState(() {
@@ -123,10 +115,7 @@ class _HomePageState extends State<HomePage> {
 
       if (hasUserId && hasAccessToken && wasSyncActive) {
         final storedCustomUrl = credentials['customSyncUrl'] as String?;
-        await HealthBgSync.configure(
-          environment: HealthBgSyncEnvironment.production,
-          customSyncUrl: storedCustomUrl,
-        );
+        await HealthBgSync.configure(environment: HealthBgSyncEnvironment.production, customSyncUrl: storedCustomUrl);
         _checkStatus();
         _setStatus('Session restored');
       }
@@ -137,12 +126,7 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  Future<String?> _fetchToken(
-    String userId,
-    String appId,
-    String appSecret,
-    String baseUrl,
-  ) async {
+  Future<String?> _fetchToken(String userId, String appId, String appSecret, String baseUrl) async {
     final url = Uri.parse('$baseUrl/api/v1/users/$userId/token');
     _setStatus('Fetching token...');
 
@@ -176,12 +160,8 @@ class _HomePageState extends State<HomePage> {
     setState(() => _isLoading = true);
 
     try {
-      final fullSyncUrl =
-          '$baseUrl/api/v1/sdk/users/{user_id}/sync/apple/healthion';
-      await HealthBgSync.configure(
-        environment: HealthBgSyncEnvironment.production,
-        customSyncUrl: fullSyncUrl,
-      );
+      final fullSyncUrl = '$baseUrl/api/v1/sdk/users/{user_id}/sync/apple/healthion';
+      await HealthBgSync.configure(environment: HealthBgSyncEnvironment.production, customSyncUrl: fullSyncUrl);
       _checkStatus();
 
       final token = await _fetchToken(userId, appId, appSecret, baseUrl);
@@ -220,9 +200,12 @@ class _HomePageState extends State<HomePage> {
 
   void _setStatus(String message) {
     setState(() => _statusMessage = message);
-    final log =
-        '${DateTime.now().toIso8601String().split('T').last.split('.').first} $message';
+    final log = '${DateTime.now().toIso8601String().split('T').last.split('.').first} $message';
     appLogs.add(log);
+    // Keep only the last N entries to prevent memory/performance issues
+    if (appLogs.length > _maxLogEntries) {
+      appLogs.removeRange(0, appLogs.length - _maxLogEntries);
+    }
     debugPrint('[Demo] $message');
   }
 
@@ -247,15 +230,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _requestAuthorization() async {
     setState(() => _isLoading = true);
     try {
-      final authorized = await HealthBgSync.requestAuthorization(
-        types: [
-          HealthDataType.steps,
-          HealthDataType.heartRate,
-          HealthDataType.activeEnergy,
-          HealthDataType.sleep,
-          HealthDataType.workout,
-        ],
-      );
+      final authorized = await HealthBgSync.requestAuthorization(types: HealthDataType.values);
       setState(() => _isAuthorized = authorized);
       _setStatus(authorized ? 'Authorized' : 'Authorization denied');
     } on NotSignedInException {
@@ -326,9 +301,7 @@ class _HomePageState extends State<HomePage> {
               CupertinoButton(
                 padding: const EdgeInsets.all(12),
                 child: const Icon(CupertinoIcons.doc_text, size: 24),
-                onPressed: () => Navigator.of(
-                  context,
-                ).push(CupertinoPageRoute(builder: (c) => const LogsPage())),
+                onPressed: () => Navigator.of(context).push(CupertinoPageRoute(builder: (c) => const LogsPage())),
               ),
             ],
           ),
@@ -343,16 +316,9 @@ class _HomePageState extends State<HomePage> {
                   _buildStatusCard(),
                   const SizedBox(height: 24),
 
-                  if (!_isSignedIn) ...[
-                    _buildLoginSection(),
-                  ] else ...[
-                    _buildActionsSection(),
-                  ],
+                  if (!_isSignedIn) ...[_buildLoginSection()] else ...[_buildActionsSection()],
 
-                  if (_statusMessage.isNotEmpty) ...[
-                    const SizedBox(height: 24),
-                    _buildStatusMessage(),
-                  ],
+                  if (_statusMessage.isNotEmpty) ...[const SizedBox(height: 24), _buildStatusMessage()],
                 ],
               ),
             ),
@@ -368,13 +334,7 @@ class _HomePageState extends State<HomePage> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 2))],
       ),
       child: Row(
         children: [
@@ -405,22 +365,14 @@ class _HomePageState extends State<HomePage> {
               children: [
                 Text(
                   _isSyncing ? 'Syncing Active' : 'Not Syncing',
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: -0.3,
-                  ),
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600, letterSpacing: -0.3),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   _isSignedIn
                       ? 'Connected as ${_userIdController.text.length > 8 ? '${_userIdController.text.substring(0, 8)}...' : _userIdController.text}'
                       : 'Not connected',
-                  style: TextStyle(
-                    fontSize: 15,
-                    color: Colors.grey[600],
-                    letterSpacing: -0.2,
-                  ),
+                  style: TextStyle(fontSize: 15, color: Colors.grey[600], letterSpacing: -0.2),
                 ),
               ],
             ),
@@ -436,13 +388,7 @@ class _HomePageState extends State<HomePage> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 2))],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -451,25 +397,12 @@ class _HomePageState extends State<HomePage> {
             padding: EdgeInsets.fromLTRB(20, 20, 20, 12),
             child: Text(
               'CONNECT',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: Colors.grey,
-                letterSpacing: 0.5,
-              ),
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.grey, letterSpacing: 0.5),
             ),
           ),
-          _buildTextField(
-            controller: _userIdController,
-            placeholder: 'User ID',
-            icon: CupertinoIcons.person,
-          ),
+          _buildTextField(controller: _userIdController, placeholder: 'User ID', icon: CupertinoIcons.person),
           _buildDivider(),
-          _buildTextField(
-            controller: _appIdController,
-            placeholder: 'App ID',
-            icon: CupertinoIcons.app,
-          ),
+          _buildTextField(controller: _appIdController, placeholder: 'App ID', icon: CupertinoIcons.app),
           _buildDivider(),
           _buildTextField(
             controller: _appSecretController,
@@ -478,11 +411,7 @@ class _HomePageState extends State<HomePage> {
             obscureText: true,
           ),
           _buildDivider(),
-          _buildTextField(
-            controller: _customUrlController,
-            placeholder: 'API URL',
-            icon: CupertinoIcons.link,
-          ),
+          _buildTextField(controller: _customUrlController, placeholder: 'API URL', icon: CupertinoIcons.link),
           Padding(
             padding: const EdgeInsets.all(20),
             child: SizedBox(
@@ -492,13 +421,7 @@ class _HomePageState extends State<HomePage> {
                 borderRadius: BorderRadius.circular(12),
                 child: _isLoading
                     ? const CupertinoActivityIndicator(color: Colors.white)
-                    : const Text(
-                        'Connect',
-                        style: TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
+                    : const Text('Connect', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
               ),
             ),
           ),
@@ -527,10 +450,7 @@ class _HomePageState extends State<HomePage> {
               padding: EdgeInsets.zero,
               decoration: const BoxDecoration(),
               style: const TextStyle(fontSize: 17),
-              placeholderStyle: TextStyle(
-                fontSize: 17,
-                color: Colors.grey[400],
-              ),
+              placeholderStyle: TextStyle(fontSize: 17, color: Colors.grey[400]),
             ),
           ),
         ],
@@ -550,13 +470,7 @@ class _HomePageState extends State<HomePage> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 2))],
       ),
       child: Column(
         children: [
@@ -573,9 +487,7 @@ class _HomePageState extends State<HomePage> {
               icon: _isSyncing ? CupertinoIcons.pause : CupertinoIcons.play,
               iconColor: const Color(0xFF34C759),
               title: _isSyncing ? 'Stop Sync' : 'Start Sync',
-              subtitle: _isSyncing
-                  ? 'Background sync is active'
-                  : 'Begin syncing health data',
+              subtitle: _isSyncing ? 'Background sync is active' : 'Begin syncing health data',
               onTap: _isSyncing ? _stopBackgroundSync : _startBackgroundSync,
             ),
             _buildDivider(),
@@ -620,7 +532,7 @@ class _HomePageState extends State<HomePage> {
               width: 36,
               height: 36,
               decoration: BoxDecoration(
-                color: iconColor.withOpacity(0.12),
+                color: iconColor.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Icon(icon, color: iconColor, size: 20),
@@ -635,28 +547,15 @@ class _HomePageState extends State<HomePage> {
                     style: TextStyle(
                       fontSize: 17,
                       fontWeight: FontWeight.w500,
-                      color: destructive
-                          ? const Color(0xFFFF3B30)
-                          : Colors.black,
+                      color: destructive ? const Color(0xFFFF3B30) : Colors.black,
                       letterSpacing: -0.2,
                     ),
                   ),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey[500],
-                      letterSpacing: -0.1,
-                    ),
-                  ),
+                  Text(subtitle, style: TextStyle(fontSize: 14, color: Colors.grey[500], letterSpacing: -0.1)),
                 ],
               ),
             ),
-            Icon(
-              CupertinoIcons.chevron_right,
-              color: Colors.grey[300],
-              size: 20,
-            ),
+            Icon(CupertinoIcons.chevron_right, color: Colors.grey[300], size: 20),
           ],
         ),
       ),
@@ -664,23 +563,19 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildStatusMessage() {
-    final isError =
-        _statusMessage.toLowerCase().contains('error') ||
-        _statusMessage.toLowerCase().contains('failed');
+    final isError = _statusMessage.toLowerCase().contains('error') || _statusMessage.toLowerCase().contains('failed');
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: isError
-            ? const Color(0xFFFF3B30).withOpacity(0.1)
-            : const Color(0xFF34C759).withOpacity(0.1),
+            ? const Color(0xFFFF3B30).withValues(alpha: 0.1)
+            : const Color(0xFF34C759).withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
         children: [
           Icon(
-            isError
-                ? CupertinoIcons.exclamationmark_circle
-                : CupertinoIcons.checkmark_circle,
+            isError ? CupertinoIcons.exclamationmark_circle : CupertinoIcons.checkmark_circle,
             color: isError ? const Color(0xFFFF3B30) : const Color(0xFF34C759),
             size: 22,
           ),
@@ -690,9 +585,7 @@ class _HomePageState extends State<HomePage> {
               _statusMessage,
               style: TextStyle(
                 fontSize: 15,
-                color: isError
-                    ? const Color(0xFFFF3B30)
-                    : const Color(0xFF34C759),
+                color: isError ? const Color(0xFFFF3B30) : const Color(0xFF34C759),
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -719,11 +612,7 @@ class _LogsPageState extends State<LogsPage> {
         backgroundColor: const Color(0xFFF2F2F7),
         title: const Text(
           'Sync Logs',
-          style: TextStyle(
-            fontSize: 17,
-            fontWeight: FontWeight.w600,
-            color: Colors.black,
-          ),
+          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: Colors.black),
         ),
         leading: CupertinoButton(
           padding: EdgeInsets.zero,
@@ -743,67 +632,68 @@ class _LogsPageState extends State<LogsPage> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(
-                    CupertinoIcons.doc_text,
-                    size: 48,
-                    color: Colors.grey[300],
-                  ),
+                  Icon(CupertinoIcons.doc_text, size: 48, color: Colors.grey[300]),
                   const SizedBox(height: 12),
-                  Text(
-                    'No logs yet',
-                    style: TextStyle(fontSize: 17, color: Colors.grey[400]),
-                  ),
+                  Text('No logs yet', style: TextStyle(fontSize: 17, color: Colors.grey[400])),
                 ],
               ),
             )
-          : ListView.builder(
+          : ListView.separated(
               padding: const EdgeInsets.all(16),
               itemCount: appLogs.length,
+              separatorBuilder: (context, index) => const SizedBox(height: 8),
               itemBuilder: (context, index) {
                 final log = appLogs[appLogs.length - 1 - index];
-                final isError = log.contains('❌') || log.contains('Error');
-                final isSuccess = log.contains('✅');
-
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        width: 8,
-                        height: 8,
-                        margin: const EdgeInsets.only(top: 6),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: isError
-                              ? const Color(0xFFFF3B30)
-                              : isSuccess
-                              ? const Color(0xFF34C759)
-                              : Colors.grey[300],
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          log,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontFamily: 'Menlo',
-                            color: Colors.grey[700],
-                            height: 1.4,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                return _LogItem(
+                  log: log,
+                  // Use log content + index as key for better performance
+                  key: ValueKey('${appLogs.length - 1 - index}_${log.hashCode}'),
                 );
               },
             ),
+    );
+  }
+}
+
+// Extracted log item widget for better performance
+class _LogItem extends StatelessWidget {
+  final String log;
+
+  const _LogItem({required this.log, super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    // Pre-compute these once per item
+    final isError = log.contains('❌') || log.contains('Error');
+    final isSuccess = log.contains('✅');
+
+    final Color dotColor = isError
+        ? const Color(0xFFFF3B30)
+        : isSuccess
+        ? const Color(0xFF34C759)
+        : const Color(0xFFE5E5EA);
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.all(Radius.circular(10))),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            margin: const EdgeInsets.only(top: 6),
+            decoration: BoxDecoration(shape: BoxShape.circle, color: dotColor),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              log,
+              style: const TextStyle(fontSize: 13, fontFamily: 'Menlo', color: Color(0xFF666666), height: 1.4),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
