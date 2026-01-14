@@ -284,31 +284,26 @@ extension HealthBgSyncPlugin {
     private func _mapWorkout(_ w: HKWorkout) -> [String: Any] {
         let df = ISO8601DateFormatter()
         
-        // Duration in seconds
-        let durationSeconds = w.duration
+        // Build workout statistics array
+        var stats: [[String: Any]] = []
         
-        // Source info
-        let source: [String: Any] = [
-            "provider": "Apple",
-            "device": w.sourceRevision.productType ?? w.sourceRevision.source.name
-        ]
-        
-        // Get workout name from metadata if available
-        let workoutName: Any = w.metadata?[HKMetadataKeyWorkoutBrandName] as? String ?? NSNull()
-        
-        // Extract statistics using new iOS 16+ API with fallback
-        var caloriesKcal: Any = NSNull()
-        var distanceMeters: Any = NSNull()
-        var avgHeartRateBpm: Any = NSNull()
-        var maxHeartRateBpm: Any = NSNull()
-        var elevationGainMeters: Any = NSNull()
+        // Duration
+        stats.append([
+            "type": "duration",
+            "value": w.duration,
+            "unit": "s"
+        ])
         
         if #available(iOS 16.0, *) {
             // iOS 16+ - use statistics(for:) API
             if let energyType = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned),
                let energyStats = w.statistics(for: energyType),
                let sum = energyStats.sumQuantity() {
-                caloriesKcal = sum.doubleValue(for: .kilocalorie())
+                stats.append([
+                    "type": "activeEnergyBurned",
+                    "value": sum.doubleValue(for: .kilocalorie()),
+                    "unit": "kcal"
+                ])
             }
             
             // Distance - try multiple types based on workout
@@ -322,7 +317,11 @@ extension HealthBgSyncPlugin {
                 if let distType = HKQuantityType.quantityType(forIdentifier: distanceTypeId),
                    let distStats = w.statistics(for: distType),
                    let sum = distStats.sumQuantity() {
-                    distanceMeters = sum.doubleValue(for: .meter())
+                    stats.append([
+                        "type": "distance",
+                        "value": sum.doubleValue(for: .meter()),
+                        "unit": "m"
+                    ])
                     break
                 }
             }
@@ -331,49 +330,55 @@ extension HealthBgSyncPlugin {
             if let hrType = HKQuantityType.quantityType(forIdentifier: .heartRate),
                let hrStats = w.statistics(for: hrType) {
                 if let avg = hrStats.averageQuantity() {
-                    avgHeartRateBpm = avg.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+                    stats.append([
+                        "type": "averageHeartRate",
+                        "value": avg.doubleValue(for: HKUnit.count().unitDivided(by: .minute())),
+                        "unit": "bpm"
+                    ])
                 }
                 if let max = hrStats.maximumQuantity() {
-                    maxHeartRateBpm = max.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+                    stats.append([
+                        "type": "maxHeartRate",
+                        "value": max.doubleValue(for: HKUnit.count().unitDivided(by: .minute())),
+                        "unit": "bpm"
+                    ])
                 }
             }
             
-            // Elevation gain - from metadata (HKMetadataKeyElevationAscended)
+            // Elevation gain - from metadata
             if let elevationAscended = w.metadata?[HKMetadataKeyElevationAscended] as? HKQuantity {
-                elevationGainMeters = elevationAscended.doubleValue(for: .meter())
+                stats.append([
+                    "type": "elevationGain",
+                    "value": elevationAscended.doubleValue(for: .meter()),
+                    "unit": "m"
+                ])
             }
             
         } else {
             // iOS 15 and earlier - use deprecated properties
             if let energy = w.totalEnergyBurned {
-                caloriesKcal = energy.doubleValue(for: .kilocalorie())
+                stats.append([
+                    "type": "activeEnergyBurned",
+                    "value": energy.doubleValue(for: .kilocalorie()),
+                    "unit": "kcal"
+                ])
             }
             if let dist = w.totalDistance {
-                distanceMeters = dist.doubleValue(for: .meter())
+                stats.append([
+                    "type": "distance",
+                    "value": dist.doubleValue(for: .meter()),
+                    "unit": "m"
+                ])
             }
-        }
-        
-        // Calculate pace (seconds per km) if we have distance and duration
-        var avgPaceSecPerKm: Any = NSNull()
-        if let distance = distanceMeters as? Double, distance > 0, durationSeconds > 0 {
-            let distanceKm = distance / 1000.0
-            avgPaceSecPerKm = durationSeconds / distanceKm
         }
 
         return [
-            "id": w.uuid.uuidString,
+            "uuid": w.uuid.uuidString,
             "type": _workoutTypeString(w.workoutActivityType),
-            "name": workoutName,
-            "start_time": df.string(from: w.startDate),
-            "end_time": df.string(from: w.endDate),
-            "duration_seconds": Int(durationSeconds),
-            "source": source,
-            "calories_kcal": caloriesKcal,
-            "distance_meters": distanceMeters,
-            "avg_heart_rate_bpm": avgHeartRateBpm,
-            "max_heart_rate_bpm": maxHeartRateBpm,
-            "avg_pace_sec_per_km": avgPaceSecPerKm,
-            "elevation_gain_meters": elevationGainMeters
+            "startDate": df.string(from: w.startDate),
+            "endDate": df.string(from: w.endDate),
+            "sourceName": w.sourceRevision.source.name,
+            "workoutStatistics": stats
         ]
     }
 

@@ -704,6 +704,45 @@ import BackgroundTasks
         }
     }
     
+    /// Logs a pretty-printed JSON payload without truncation
+    internal func logPrettyJSON(_ data: Data, label: String) {
+        guard let jsonObject = try? JSONSerialization.jsonObject(with: data, options: []),
+              let prettyData = try? JSONSerialization.data(withJSONObject: jsonObject, options: [.prettyPrinted, .sortedKeys]),
+              let prettyString = String(data: prettyData, encoding: .utf8) else {
+            // Fallback to raw string if pretty-print fails
+            if let rawString = String(data: data, encoding: .utf8) {
+                logMessage("\(label): \(rawString)")
+            }
+            return
+        }
+        
+        // Log to Flutter event sink (full JSON)
+        if let sink = logEventSink {
+            let fullMessage = "\(label):\n\(prettyString)"
+            DispatchQueue.main.async {
+                sink(fullMessage)
+            }
+        }
+        
+        // For NSLog, split into chunks to avoid truncation (NSLog limit is ~1024 chars)
+        let maxChunkSize = 800
+        let lines = prettyString.components(separatedBy: "\n")
+        var currentChunk = "\(label):\n"
+        
+        for line in lines {
+            if currentChunk.count + line.count + 1 > maxChunkSize {
+                NSLog("[HealthBgSync] %@", currentChunk)
+                currentChunk = ""
+            }
+            currentChunk += line + "\n"
+        }
+        
+        // Log remaining chunk
+        if !currentChunk.isEmpty {
+            NSLog("[HealthBgSync] %@", currentChunk)
+        }
+    }
+    
     // MARK: - FlutterStreamHandler
     public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
         logEventSink = events

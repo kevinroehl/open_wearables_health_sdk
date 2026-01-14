@@ -149,9 +149,8 @@ extension HealthBgSyncPlugin {
         req.httpBody = payloadData
         req.setValue("\(payloadData.count)", forHTTPHeaderField: "Content-Length")
         
-        if let payloadString = String(data: payloadData, encoding: .utf8) {
-            self.logMessage("📤 Request Payload: \(payloadString)")
-        }
+        // Log pretty-printed JSON payload
+        self.logPrettyJSON(payloadData, label: "📤 Request Payload")
 
         let task = foregroundSession.dataTask(with: req) { [weak self] data, response, error in
             guard let self = self else { return }
@@ -169,8 +168,8 @@ extension HealthBgSyncPlugin {
             if let httpResponse = response as? HTTPURLResponse {
                 self.logMessage("📥 Response: HTTP \(httpResponse.statusCode)")
                 
-                if let data = data, let responseString = String(data: data, encoding: .utf8) {
-                    self.logMessage("📥 Response Body: \(responseString)")
+                if let data = data {
+                    self.logPrettyJSON(data, label: "📥 Response Body")
                 }
 
                 if (200...299).contains(httpResponse.statusCode) {
@@ -181,8 +180,8 @@ extension HealthBgSyncPlugin {
                     try? FileManager.default.removeItem(atPath: payloadURL.path)
                     completion(true)
                 } else {
-                    if let data = data, let responseString = String(data: data, encoding: .utf8) {
-                        self.logMessage("⛔️ Upload failed: \(responseString)")
+                    if let data = data {
+                        self.logPrettyJSON(data, label: "⛔️ Upload failed")
                     }
                     try? FileManager.default.removeItem(atPath: payloadURL.path)
                     completion(false)
