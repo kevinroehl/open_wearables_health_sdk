@@ -60,7 +60,7 @@ A Flutter plugin for secure background health data synchronization from Apple He
    
    { "externalId": "user-123" }
    ```
-   
+
    Response:
    ```json
    { 
@@ -166,12 +166,17 @@ app.post('/api/health/connect', authenticateUser, async (req, res) => {
 
 ```dart
 await HealthBgSync.configure(
-  environment: HealthBgSyncEnvironment.production,
+environment: HealthBgSyncEnvironment.production,
+);
+
+// Or with custom URL for local testing:
+await HealthBgSync.configure(
+customSyncUrl: 'http://localhost:3000/sdk/users/{user_id}/sync/apple/healthion',
 );
 
 // Session is automatically restored if user was previously signed in
 if (HealthBgSync.isSignedIn) {
-  print('Welcome back, ${HealthBgSync.currentUser?.userId}!');
+print('Welcome back, ${HealthBgSync.currentUser?.userId}!');
 }
 ```
 
@@ -183,26 +188,35 @@ final response = await yourApi.post('/health/connect');
 
 // Sign in with the credentials
 try {
-  final user = await HealthBgSync.signIn(
-    userId: response['userId'],
-    accessToken: response['accessToken'],
-  );
-  print('Connected: ${user.userId}');
+final user = await HealthBgSync.signIn(
+userId: response['userId'],
+accessToken: response['accessToken'],
+);
+print('Connected: ${user.userId}');
 } on SignInException catch (e) {
-  print('Failed: ${e.message}');
+print('Failed: ${e.message}');
 }
+
+// With automatic token refresh (optional):
+final user = await HealthBgSync.signIn(
+userId: response['userId'],
+accessToken: response['accessToken'],
+appId: 'your-app-id',
+appSecret: 'your-app-secret',
+baseUrl: 'https://api.openwearables.io',
+);
 ```
 
 ### 3. Request Permissions
 
 ```dart
 final authorized = await HealthBgSync.requestAuthorization(
-  types: [
-    HealthDataType.steps,
-    HealthDataType.heartRate,
-    HealthDataType.sleep,
-    HealthDataType.workout,
-  ],
+types: [
+HealthDataType.steps,
+HealthDataType.heartRate,
+HealthDataType.sleep,
+HealthDataType.workout,
+],
 );
 ```
 
@@ -212,7 +226,18 @@ final authorized = await HealthBgSync.requestAuthorization(
 await HealthBgSync.startBackgroundSync();
 ```
 
-### 5. Sign Out
+### 5. Check Sync Status (optional)
+
+```dart
+final status = await HealthBgSync.getSyncStatus();
+if (status['hasResumableSession'] == true) {
+print('Sync interrupted, ${status['sentCount']} records already sent');
+// Manually resume if needed
+await HealthBgSync.resumeSync();
+}
+```
+
+### 6. Sign Out
 
 ```dart
 await HealthBgSync.signOut();
@@ -225,52 +250,65 @@ await HealthBgSync.signOut();
 
 ```dart
 class HealthService {
-  final ApiClient _api;
-  
-  Future<void> connect() async {
-    // 1. Configure SDK (once)
-    await HealthBgSync.configure();
-    
-    // 2. Check current status
-    switch (HealthBgSync.status) {
-      case HealthBgSyncStatus.signedIn:
-        // Already signed in, start sync
-        await _startSync();
-        return;
-        
-      case HealthBgSyncStatus.configured:
-        // Need to sign in
-        await _signIn();
-        await _startSync();
-        return;
-        
-      case HealthBgSyncStatus.notConfigured:
-        throw Exception('SDK not configured');
-    }
-  }
-  
-  Future<void> _signIn() async {
-    // Get credentials from your backend
-    final response = await _api.post('/health/connect');
-    
-    // Sign in with SDK
-    await HealthBgSync.signIn(
-      userId: response['userId'],
-      accessToken: response['accessToken'],
-    );
-  }
-  
-  Future<void> _startSync() async {
-    await HealthBgSync.requestAuthorization(
-      types: HealthDataType.values,
-    );
-    await HealthBgSync.startBackgroundSync();
-  }
-  
-  Future<void> disconnect() async {
-    await HealthBgSync.stopBackgroundSync();
-    await HealthBgSync.signOut();
-  }
+   final ApiClient _api;
+
+   Future<void> connect() async {
+      // 1. Configure SDK (once)
+      await HealthBgSync.configure();
+
+      // 2. Check current status
+      switch (HealthBgSync.status) {
+         case HealthBgSyncStatus.signedIn:
+         // Already signed in, check if sync is active
+            if (!HealthBgSync.isSyncActive) {
+               await _startSync();
+            }
+            return;
+
+         case HealthBgSyncStatus.configured:
+         // Need to sign in
+            await _signIn();
+            await _startSync();
+            return;
+
+         case HealthBgSyncStatus.notConfigured:
+            throw Exception('SDK not configured');
+      }
+   }
+
+   Future<void> _signIn() async {
+      // Get credentials from your backend
+      final response = await _api.post('/health/connect');
+
+      // Sign in with SDK (with optional auto-refresh)
+      await HealthBgSync.signIn(
+         userId: response['userId'],
+         accessToken: response['accessToken'],
+         appId: response['appId'],       // optional, for token refresh
+         appSecret: response['appSecret'], // optional, for token refresh
+         baseUrl: response['baseUrl'],    // optional, for token refresh
+      );
+   }
+
+   Future<void> _startSync() async {
+      await HealthBgSync.requestAuthorization(
+         types: HealthDataType.values,
+      );
+      await HealthBgSync.startBackgroundSync();
+   }
+
+   Future<void> disconnect() async {
+      await HealthBgSync.stopBackgroundSync();
+      await HealthBgSync.signOut();
+   }
+
+   Future<void> checkSyncStatus() async {
+      final status = await HealthBgSync.getSyncStatus();
+      if (status['hasResumableSession'] == true) {
+         print('Resumable sync: ${status['sentCount']} records sent');
+         await HealthBgSync.resumeSync();
+      }
+   }
 }
 ```
 
@@ -280,12 +318,16 @@ class HealthService {
 
 | Category | Types |
 |----------|-------|
-| **Activity** | steps, distanceWalkingRunning, distanceCycling, flightsClimbed |
+| **Activity** | steps, distanceWalkingRunning, distanceCycling, flightsClimbed, walkingSpeed, walkingStepLength, walkingAsymmetryPercentage, walkingDoubleSupportPercentage, sixMinuteWalkTestDistance |
 | **Energy** | activeEnergy, basalEnergy |
-| **Heart** | heartRate, restingHeartRate, heartRateVariabilitySDNN, vo2Max |
-| **Body** | bodyMass, height, bmi, bodyFatPercentage |
-| **Vitals** | bloodPressure, bloodGlucose, respiratoryRate |
+| **Heart** | heartRate, restingHeartRate, heartRateVariabilitySDNN, vo2Max, oxygenSaturation |
+| **Respiratory** | respiratoryRate |
+| **Body** | bodyMass, height, bmi, bodyFatPercentage, leanBodyMass, waistCircumference (iOS 16+), bodyTemperature |
+| **Blood Glucose / Insulin** | bloodGlucose, insulinDelivery (iOS 16+) |
+| **Blood Pressure** | bloodPressure, bloodPressureSystolic, bloodPressureDiastolic |
+| **Nutrition** | dietaryEnergyConsumed, dietaryCarbohydrates, dietaryProtein, dietaryFatTotal, dietaryWater |
 | **Sleep** | sleep, mindfulSession |
+| **Reproductive** | menstrualFlow, cervicalMucusQuality, ovulationTestResult, sexualActivity |
 | **Workouts** | workout |
 
 ---
@@ -296,14 +338,18 @@ class HealthService {
 
 | Method | Description |
 |--------|-------------|
-| `configure()` | Initialize SDK and restore session |
-| `signIn(userId:, accessToken:)` | Sign in with credentials from backend |
+| `configure({environment, customSyncUrl})` | Initialize SDK and restore session |
+| `signIn({userId, accessToken, appId?, appSecret?, baseUrl?})` | Sign in with credentials from backend |
 | `signOut()` | Sign out and clear all credentials |
-| `requestAuthorization()` | Request health data permissions |
+| `requestAuthorization({types})` | Request health data permissions |
 | `startBackgroundSync()` | Enable background sync |
 | `stopBackgroundSync()` | Disable background sync |
 | `syncNow()` | Trigger immediate sync |
-| `resetAnchors()` | Reset sync state |
+| `resetAnchors()` | Reset sync state (forces full re-export) |
+| `getStoredCredentials()` | Get stored credentials for debugging |
+| `getSyncStatus()` | Get current sync session status |
+| `resumeSync()` | Manually resume interrupted sync |
+| `clearSyncSession()` | Clear interrupted sync without resuming |
 
 ### Properties
 
@@ -311,7 +357,9 @@ class HealthService {
 |----------|------|-------------|
 | `isConfigured` | `bool` | SDK is configured |
 | `isSignedIn` | `bool` | User is signed in |
+| `isSyncActive` | `bool` | Background sync is active |
 | `currentUser` | `HealthBgSyncUser?` | Current user info |
+| `config` | `HealthBgSyncConfig?` | Current configuration |
 | `status` | `HealthBgSyncStatus` | Current SDK status |
 
 ### HealthBgSyncStatus
@@ -321,6 +369,22 @@ class HealthService {
 | `notConfigured` | SDK not configured, call `configure()` |
 | `configured` | SDK configured, but no user signed in |
 | `signedIn` | User signed in, ready to sync |
+
+### HealthBgSyncEnvironment
+
+| Environment | Description |
+|-------------|-------------|
+| `production` | Production environment (default) |
+| `sandbox` | Sandbox/Development environment for testing |
+
+### getSyncStatus() Return Values
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `hasResumableSession` | `bool` | Whether there's an interrupted sync to resume |
+| `sentCount` | `int` | Number of records already sent in this session |
+| `isFullExport` | `bool` | Whether this is a full export or incremental sync |
+| `createdAt` | `String?` | ISO8601 timestamp when sync started |
 
 ### Exceptions
 
