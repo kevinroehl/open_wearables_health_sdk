@@ -34,7 +34,7 @@ extension HealthBgSyncPlugin {
                     "unit": NSNull(),
                     "startDate": ISO8601DateFormatter().string(from: s.startDate),
                     "endDate": ISO8601DateFormatter().string(from: s.endDate),
-                    "sourceName": s.sourceRevision.source.name,
+                    "source": _mapSource(s.sourceRevision, device: s.device),
                     "recordMetadata": _metadataList(s.metadata)
                 ])
             }
@@ -86,7 +86,7 @@ extension HealthBgSyncPlugin {
                             "unit": NSNull(),
                             "startDate": dateFormatter.string(from: s.startDate),
                             "endDate": dateFormatter.string(from: s.endDate),
-                            "sourceName": s.sourceRevision.source.name,
+                            "source": _mapSource(s.sourceRevision, device: s.device),
                             "recordMetadata": _metadataList(s.metadata)
                         ])
                     }
@@ -134,7 +134,7 @@ extension HealthBgSyncPlugin {
                     "unit": NSNull(),
                     "startDate": ISO8601DateFormatter().string(from: s.startDate),
                     "endDate": ISO8601DateFormatter().string(from: s.endDate),
-                    "sourceName": s.sourceRevision.source.name,
+                    "source": _mapSource(s.sourceRevision, device: s.device),
                     "recordMetadata": _metadataList(s.metadata)
                 ])
             }
@@ -302,7 +302,7 @@ extension HealthBgSyncPlugin {
             "unit": finalUnit,
             "startDate": df.string(from: q.startDate),
             "endDate": df.string(from: q.endDate),
-            "sourceName": q.sourceRevision.source.name,
+            "source": _mapSource(q.sourceRevision, device: q.device),
             "recordMetadata": _metadataList(q.metadata)
         ]
     }
@@ -316,7 +316,7 @@ extension HealthBgSyncPlugin {
             "unit": NSNull(),         // no unit for category
             "startDate": df.string(from: c.startDate),
             "endDate": df.string(from: c.endDate),
-            "sourceName": c.sourceRevision.source.name,
+            "source": _mapSource(c.sourceRevision, device: c.device),
             "recordMetadata": _metadataList(c.metadata)
         ]
     }
@@ -325,7 +325,7 @@ extension HealthBgSyncPlugin {
         // Example: flatten blood pressure correlation into two records
         var records: [[String: Any]] = []
         let df = ISO8601DateFormatter()
-        let src = corr.sourceRevision.source.name
+        let source = _mapSource(corr.sourceRevision, device: corr.device)
 
         for sample in corr.objects {
             if let q = sample as? HKQuantitySample {
@@ -338,7 +338,7 @@ extension HealthBgSyncPlugin {
                     "unit": unitOut,
                     "startDate": df.string(from: q.startDate),
                     "endDate": df.string(from: q.endDate),
-                    "sourceName": src,
+                    "source": source,
                     "recordMetadata": _metadataList(q.metadata)
                 ])
             }
@@ -607,7 +607,7 @@ extension HealthBgSyncPlugin {
             "type": _workoutTypeString(w.workoutActivityType),
             "startDate": df.string(from: w.startDate),
             "endDate": df.string(from: w.endDate),
-            "sourceName": w.sourceRevision.source.name,
+            "source": _mapSource(w.sourceRevision, device: w.device),
             "workoutStatistics": stats
         ]
     }
@@ -864,7 +864,7 @@ extension HealthBgSyncPlugin {
             "unit": finalUnit,
             "startDate": dateFormatter.string(from: q.startDate),
             "endDate": dateFormatter.string(from: q.endDate),
-            "sourceName": q.sourceRevision.source.name,
+            "source": _mapSource(q.sourceRevision, device: q.device),
             "recordMetadata": _metadataList(q.metadata)
         ]
     }
@@ -877,14 +877,14 @@ extension HealthBgSyncPlugin {
             "unit": NSNull(),
             "startDate": dateFormatter.string(from: c.startDate),
             "endDate": dateFormatter.string(from: c.endDate),
-            "sourceName": c.sourceRevision.source.name,
+            "source": _mapSource(c.sourceRevision, device: c.device),
             "recordMetadata": _metadataList(c.metadata)
         ]
     }
 
     private func _mapCorrelationEfficient(_ corr: HKCorrelation, dateFormatter: ISO8601DateFormatter) -> [[String: Any]] {
         var records: [[String: Any]] = []
-        let src = corr.sourceRevision.source.name
+        let source = _mapSource(corr.sourceRevision, device: corr.device)
 
         for sample in corr.objects {
             if let q = sample as? HKQuantitySample {
@@ -897,7 +897,7 @@ extension HealthBgSyncPlugin {
                     "unit": unitOut,
                     "startDate": dateFormatter.string(from: q.startDate),
                     "endDate": dateFormatter.string(from: q.endDate),
-                    "sourceName": src,
+                    "source": source,
                     "recordMetadata": _metadataList(q.metadata)
                 ])
             }
@@ -1160,8 +1160,74 @@ extension HealthBgSyncPlugin {
             "type": _workoutTypeString(w.workoutActivityType),
             "startDate": dateFormatter.string(from: w.startDate),
             "endDate": dateFormatter.string(from: w.endDate),
-            "sourceName": w.sourceRevision.source.name,
+            "source": _mapSource(w.sourceRevision, device: w.device),
             "workoutStatistics": stats
         ]
+    }
+    
+    // MARK: - Source mapper (combines sourceRevision + device)
+    
+    /// Maps all source information (HKSourceRevision + HKDevice) to a single flat dictionary
+    /// Only includes non-null values
+    private func _mapSource(_ sourceRevision: HKSourceRevision, device: HKDevice?) -> [String: Any] {
+        var result: [String: Any] = [:]
+        
+        // === HKSource (always available) ===
+        result["name"] = sourceRevision.source.name
+        result["bundleIdentifier"] = sourceRevision.source.bundleIdentifier
+        
+        // === HKSourceRevision (some optional) ===
+        if let version = sourceRevision.version {
+            result["version"] = version
+        }
+        
+        if let productType = sourceRevision.productType {
+            result["productType"] = productType
+        }
+        
+        // operatingSystemVersion (always available)
+        let osVersion = sourceRevision.operatingSystemVersion
+        result["operatingSystemVersion"] = [
+            "majorVersion": osVersion.majorVersion,
+            "minorVersion": osVersion.minorVersion,
+            "patchVersion": osVersion.patchVersion
+        ]
+        
+        // === HKDevice (all optional, flat) ===
+        if let device = device {
+            if let name = device.name {
+                result["deviceName"] = name
+            }
+            
+            if let manufacturer = device.manufacturer {
+                result["deviceManufacturer"] = manufacturer
+            }
+            
+            if let model = device.model {
+                result["deviceModel"] = model
+            }
+            
+            if let hardwareVersion = device.hardwareVersion {
+                result["deviceHardwareVersion"] = hardwareVersion
+            }
+            
+            if let softwareVersion = device.softwareVersion {
+                result["deviceSoftwareVersion"] = softwareVersion
+            }
+            
+            if let firmwareVersion = device.firmwareVersion {
+                result["deviceFirmwareVersion"] = firmwareVersion
+            }
+            
+            if let localIdentifier = device.localIdentifier {
+                result["deviceLocalIdentifier"] = localIdentifier
+            }
+            
+            if let udiDeviceIdentifier = device.udiDeviceIdentifier {
+                result["deviceUdiDeviceIdentifier"] = udiDeviceIdentifier
+            }
+        }
+        
+        return result
     }
 }
