@@ -1,10 +1,7 @@
-import 'dart:convert';
-
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:health_bg_sync/health_bg_sync.dart';
 import 'package:health_bg_sync/health_data_type.dart';
-import 'package:http/http.dart' as http;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -84,9 +81,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final _customUrlController = TextEditingController(text: 'https://api.openwearables.io');
   final _userIdController = TextEditingController();
-  final _appIdController = TextEditingController();
-  final _appSecretController = TextEditingController();
-  final _accessTokenController = TextEditingController();
+  final _tokenController = TextEditingController();
 
   bool _isLoading = false;
   String _statusMessage = '';
@@ -112,10 +107,8 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     _userIdController.dispose();
-    _accessTokenController.dispose();
+    _tokenController.dispose();
     _customUrlController.dispose();
-    _appIdController.dispose();
-    _appSecretController.dispose();
     super.dispose();
   }
 
@@ -132,7 +125,7 @@ class _HomePageState extends State<HomePage> {
           _userIdController.text = credentials['userId'] as String;
         }
         if (credentials['accessToken'] != null) {
-          _accessTokenController.text = credentials['accessToken'] as String;
+          _tokenController.text = credentials['accessToken'] as String;
         }
       });
 
@@ -149,34 +142,15 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  Future<String?> _fetchToken(String userId, String appId, String appSecret, String baseUrl) async {
-    final url = Uri.parse('$baseUrl/api/v1/users/$userId/token');
-    _setStatus('Fetching token...');
-
-    final response = await http.post(
-      url,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'app_id': appId, 'app_secret': appSecret}),
-    );
-
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      return data['access_token'];
-    } else {
-      throw Exception('Failed to get token: ${response.statusCode}');
-    }
-  }
-
-  Future<void> _loginWithCredentials() async {
+  Future<void> _loginWithToken() async {
     final userId = _userIdController.text.trim();
-    final appId = _appIdController.text.trim();
-    final appSecret = _appSecretController.text.trim();
+    final token = _tokenController.text.trim();
     final baseUrl = _customUrlController.text.isNotEmpty
         ? _customUrlController.text.trim()
         : 'https://api.openwearables.io';
 
-    if (userId.isEmpty || appId.isEmpty || appSecret.isEmpty) {
-      _setStatus('Please fill all fields');
+    if (userId.isEmpty || token.isEmpty) {
+      _setStatus('Please fill User ID and Token');
       return;
     }
 
@@ -187,22 +161,11 @@ class _HomePageState extends State<HomePage> {
       await HealthBgSync.configure(environment: HealthBgSyncEnvironment.production, customSyncUrl: fullSyncUrl);
       _checkStatus();
 
-      final token = await _fetchToken(userId, appId, appSecret, baseUrl);
-      if (token == null) {
-        _setStatus('Failed to retrieve token');
-        return;
-      }
-
-      setState(() => _accessTokenController.text = token);
-
       _setStatus('Signing in...');
       final authToken = token.startsWith('Bearer ') ? token : 'Bearer $token';
       await HealthBgSync.signIn(
         userId: userId,
         accessToken: authToken,
-        appId: appId,
-        appSecret: appSecret,
-        baseUrl: baseUrl,
       );
 
       _setStatus('Connected successfully');
@@ -237,7 +200,7 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         _isAuthorized = false;
         _isSyncing = false;
-        _accessTokenController.clear();
+        _tokenController.clear();
       });
     } catch (e) {
       _setStatus('Error: $e');
@@ -421,11 +384,9 @@ class _HomePageState extends State<HomePage> {
           ),
           _buildTextField(controller: _userIdController, placeholder: 'User ID', icon: CupertinoIcons.person),
           _buildDivider(),
-          _buildTextField(controller: _appIdController, placeholder: 'App ID', icon: CupertinoIcons.app),
-          _buildDivider(),
           _buildTextField(
-            controller: _appSecretController,
-            placeholder: 'App Secret',
+            controller: _tokenController,
+            placeholder: 'Token',
             icon: CupertinoIcons.lock,
             obscureText: true,
           ),
@@ -436,7 +397,7 @@ class _HomePageState extends State<HomePage> {
             child: SizedBox(
               width: double.infinity,
               child: CupertinoButton.filled(
-                onPressed: _isLoading ? null : _loginWithCredentials,
+                onPressed: _isLoading ? null : _loginWithToken,
                 borderRadius: BorderRadius.circular(12),
                 child: _isLoading
                     ? const CupertinoActivityIndicator(color: Colors.white)
