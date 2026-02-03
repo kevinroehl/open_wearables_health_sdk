@@ -133,11 +133,16 @@ class OpenWearablesHealthSdk {
   /// The accessToken must be obtained from your backend server, which
   /// generates it via communication with the Open Wearables API.
   ///
-  /// ## Token Refresh
+  /// ## Token Expiration
   ///
-  /// Pass [appId], [appSecret], and [baseUrl] to enable automatic token
-  /// refresh. The token is valid for 60 minutes, and will be automatically
-  /// refreshed before sync operations if expired.
+  /// If the token expires (server returns 401), the SDK will emit an event
+  /// on `MethodChannelOpenWearablesHealthSdk.authErrorStream`. Your app should
+  /// listen to this stream and handle re-authentication.
+  ///
+  /// ## Optional Parameters
+  ///
+  /// Pass [appId], [appSecret], and [baseUrl] for local testing or custom
+  /// backend configurations.
   ///
   /// ## Flow
   ///
@@ -150,9 +155,6 @@ class OpenWearablesHealthSdk {
   /// final user = await OpenWearablesHealthSdk.signIn(
   ///   userId: response['userId'],
   ///   accessToken: response['accessToken'],
-  ///   appId: 'your-app-id',        // For auto-refresh
-  ///   appSecret: 'your-app-secret', // For auto-refresh
-  ///   baseUrl: 'https://api.openwearables.io', // For auto-refresh
   /// );
   /// ```
   ///

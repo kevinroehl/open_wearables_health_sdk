@@ -102,6 +102,31 @@ class _HomePageState extends State<HomePage> {
       final timestamp = DateTime.now().toIso8601String().split('T').last.split('.').first;
       _addLog('$timestamp $message');
     });
+
+    // Handle auth errors (401) - sign out and redirect to login
+    MethodChannelOpenWearablesHealthSdk.authErrorStream.listen((error) {
+      final statusCode = error['statusCode'];
+      final message = error['message'] ?? 'Authentication error';
+      _addLog('🔒 Auth error: $statusCode - $message');
+      _handleAuthError();
+    });
+  }
+
+  Future<void> _handleAuthError() async {
+    // Sign out and reset state
+    try {
+      await OpenWearablesHealthSdk.signOut();
+    } catch (_) {}
+
+    if (mounted) {
+      setState(() {
+        _isSignedIn = false;
+        _isAuthorized = false;
+        _isSyncing = false;
+        _tokenController.clear();
+        _statusMessage = 'Session expired - please sign in again';
+      });
+    }
   }
 
   @override
@@ -131,7 +156,10 @@ class _HomePageState extends State<HomePage> {
 
       if (hasUserId && hasAccessToken && wasSyncActive) {
         final storedCustomUrl = credentials['customSyncUrl'] as String?;
-        await OpenWearablesHealthSdk.configure(environment: OpenWearablesHealthSdkEnvironment.production, customSyncUrl: storedCustomUrl);
+        await OpenWearablesHealthSdk.configure(
+          environment: OpenWearablesHealthSdkEnvironment.production,
+          customSyncUrl: storedCustomUrl,
+        );
         _checkStatus();
         _setStatus('Session restored');
       }
@@ -165,15 +193,15 @@ class _HomePageState extends State<HomePage> {
         final normalizedBase = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
         fullSyncUrl = '$normalizedBase/sdk/users/{user_id}/sync/apple';
       }
-      await OpenWearablesHealthSdk.configure(environment: OpenWearablesHealthSdkEnvironment.production, customSyncUrl: fullSyncUrl);
+      await OpenWearablesHealthSdk.configure(
+        environment: OpenWearablesHealthSdkEnvironment.production,
+        customSyncUrl: fullSyncUrl,
+      );
       _checkStatus();
 
       _setStatus('Signing in...');
       final authToken = token.startsWith('Bearer ') ? token : 'Bearer $token';
-      await OpenWearablesHealthSdk.signIn(
-        userId: userId,
-        accessToken: authToken,
-      );
+      await OpenWearablesHealthSdk.signIn(userId: userId, accessToken: authToken);
 
       _setStatus('Connected successfully');
       _checkStatus();

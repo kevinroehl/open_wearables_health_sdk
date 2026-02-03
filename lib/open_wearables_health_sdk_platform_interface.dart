@@ -30,8 +30,11 @@ abstract class OpenWearablesHealthSdkPlatform extends PlatformInterface {
   /// The accessToken is obtained from the developer's backend which generates it
   /// via communication with the Open Wearables API.
   ///
-  /// Optionally pass [appId], [appSecret], and [baseUrl] to enable automatic
-  /// token refresh when the 60-minute token expires.
+  /// Optionally pass [appId], [appSecret], and [baseUrl] for local testing
+  /// or custom backend configurations.
+  ///
+  /// If the token expires (401 error), listen to `authErrorStream` to handle
+  /// re-authentication in your app.
   Future<void> signIn({
     required String userId,
     required String accessToken,
@@ -58,9 +61,7 @@ abstract class OpenWearablesHealthSdkPlatform extends PlatformInterface {
 
   /// Requests authorization from HealthKit/Health Connect.
   Future<bool> requestAuthorization({required List<String> types}) {
-    throw UnimplementedError(
-      'requestAuthorization() has not been implemented.',
-    );
+    throw UnimplementedError('requestAuthorization() has not been implemented.');
   }
 
   // MARK: - Sync Operations
@@ -83,9 +84,7 @@ abstract class OpenWearablesHealthSdkPlatform extends PlatformInterface {
 
   /// Returns stored credentials for debugging/display purposes.
   Future<Map<String, dynamic>> getStoredCredentials() {
-    throw UnimplementedError(
-      'getStoredCredentials() has not been implemented.',
-    );
+    throw UnimplementedError('getStoredCredentials() has not been implemented.');
   }
 
   /// Returns the current sync session status.

@@ -56,6 +56,10 @@ import Network
     // Log event sink
     private var logEventSink: FlutterEventSink?
     private var logEventChannel: FlutterEventChannel?
+    
+    // Auth error event sink (for 401 handling)
+    internal var authErrorEventSink: FlutterEventSink?
+    private var authErrorEventChannel: FlutterEventChannel?
 
     // Background response data buffer
     internal var backgroundDataBuffer: [Int: Data] = [:]
@@ -90,6 +94,11 @@ import Network
         let logChannel = FlutterEventChannel(name: "open_wearables_health_sdk/logs", binaryMessenger: registrar.messenger())
         instance.logEventChannel = logChannel
         logChannel.setStreamHandler(instance)
+        
+        // Auth error channel for 401 handling
+        let authErrorChannel = FlutterEventChannel(name: "open_wearables_health_sdk/auth_errors", binaryMessenger: registrar.messenger())
+        instance.authErrorEventChannel = authErrorChannel
+        authErrorChannel.setStreamHandler(AuthErrorStreamHandler(plugin: instance))
     }
     
     @objc public static func setBackgroundCompletionHandler(_ handler: @escaping () -> Void) {
@@ -274,16 +283,8 @@ import Network
         // Check for resumable sync session and resume if found
         if hasResumableSyncSession() {
             logMessage("📂 Found interrupted sync, will resume...")
-            // Trigger sync - it will automatically detect and resume
-            refreshTokenIfNeeded { [weak self] success in
-                guard let self = self else { return }
-                if success {
-                    self.syncAll(fullExport: false) {
-                        self.logMessage("✅ Resumed sync completed")
-                    }
-                } else {
-                    self.logMessage("⚠️ Token refresh failed, will retry later")
-                }
+            self.syncAll(fullExport: false) {
+                self.logMessage("✅ Resumed sync completed")
             }
         }
         
@@ -302,17 +303,13 @@ import Network
         // Save to Keychain
         OpenWearablesHealthSdkKeychain.saveCredentials(userId: userId, accessToken: accessToken)
         
-        // Save app credentials for token refresh (optional - only if provided)
+        // Save app credentials if provided (for local testing / custom configurations)
         if let appId = args["appId"] as? String,
            let appSecret = args["appSecret"] as? String,
            let baseUrl = args["baseUrl"] as? String {
             OpenWearablesHealthSdkKeychain.saveAppCredentials(appId: appId, appSecret: appSecret, baseUrl: baseUrl)
-            logMessage("✅ App credentials saved for refresh")
+            logMessage("✅ App credentials saved")
         }
-        
-        // Save token expiry (60 minutes from now)
-        let expiresAt = Date().addingTimeInterval(60 * 60)
-        OpenWearablesHealthSdkKeychain.saveTokenExpiry(expiresAt)
         
         logMessage("✅ Signed in: userId=\(userId)")
         
@@ -431,74 +428,6 @@ import Network
         }
     }
     
-    // MARK: - Token Refresh
-    internal func refreshTokenIfNeeded(completion: @escaping (Bool) -> Void) {
-        // Check if token is expired
-        guard OpenWearablesHealthSdkKeychain.isTokenExpired() else {
-            completion(true) 
-            return
-        }
-        
-        logMessage("🔄 Token expired, refreshing...")
-        
-        // Check if we have credentials to refresh
-        guard OpenWearablesHealthSdkKeychain.hasRefreshCredentials(),
-              let appId = OpenWearablesHealthSdkKeychain.getAppId(),
-              let appSecret = OpenWearablesHealthSdkKeychain.getAppSecret(),
-              let baseUrl = OpenWearablesHealthSdkKeychain.getBaseUrl(),
-              let userId = OpenWearablesHealthSdkKeychain.getUserId() else {
-            logMessage("❌ Missing credentials for token refresh")
-            completion(false)
-            return
-        }
-        
-        
-        let urlString = "\(baseUrl)/api/v1/users/\(userId)/token"
-        guard let url = URL(string: urlString) else {
-            logMessage("❌ Invalid refresh URL")
-            completion(false)
-            return
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        let body: [String: Any] = ["app_id": appId, "app_secret": appSecret]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        
-        let task = foregroundSession.dataTask(with: request) { [weak self] data, response, error in
-            guard let self = self else { completion(false); return }
-            
-            if let error = error {
-                self.logMessage("❌ Token refresh failed: \(error.localizedDescription)")
-                completion(false)
-                return
-            }
-            
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200,
-                  let data = data,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let newToken = json["access_token"] as? String else {
-                self.logMessage("❌ Token refresh: invalid response")
-                completion(false)
-                return
-            }
-            
-            
-            let fullToken = newToken.hasPrefix("Bearer ") ? newToken : "Bearer \(newToken)"
-            OpenWearablesHealthSdkKeychain.saveCredentials(userId: userId, accessToken: fullToken)
-            
-            
-            let expiresAt = Date().addingTimeInterval(60 * 60)
-            OpenWearablesHealthSdkKeychain.saveTokenExpiry(expiresAt)
-            
-            self.logMessage("✅ Token refreshed successfully")
-            completion(true)
-        }
-        task.resume()
-    }
 
     // MARK: - Authorization
     internal func requestAuthorization(completion: @escaping (Bool)->Void) {
@@ -521,22 +450,12 @@ import Network
     internal func syncAll(fullExport: Bool, completion: @escaping ()->Void) {
         guard !trackedTypes.isEmpty else { completion(); return }
         
-        refreshTokenIfNeeded { [weak self] success in
-            guard let self = self else { completion(); return }
-            
-            guard success else {
-                self.logMessage("❌ Token refresh failed, cannot sync")
-                completion()
-                return
-            }
-            
-            guard self.accessToken != nil else {
-                self.logMessage("❌ No access token for sync")
-                completion()
-                return
-            }
-            self.collectAllData(fullExport: fullExport, completion: completion)
+        guard self.accessToken != nil else {
+            self.logMessage("❌ No access token for sync")
+            completion()
+            return
         }
+        self.collectAllData(fullExport: fullExport, completion: completion)
     }
     
     // MARK: - Debounced sync
@@ -969,6 +888,17 @@ import Network
         }
     }
     
+    // MARK: - Auth Error Emission
+    internal func emitAuthError(statusCode: Int) {
+        logMessage("🔒 Auth error: HTTP \(statusCode) - token invalid")
+        
+        if let sink = authErrorEventSink {
+            DispatchQueue.main.async {
+                sink(["statusCode": statusCode, "message": "Unauthorized - please re-authenticate"])
+            }
+        }
+    }
+    
     /// Logs full payload JSON to Xcode console only (NOT to Flutter event sink)
     /// Use this for debugging - payloads can be very large
     internal func logPayloadToConsole(_ data: Data, label: String) {
@@ -1113,14 +1043,8 @@ import Network
             }
             
             self.logMessage("🔄 Resuming sync after network restored...")
-            self.refreshTokenIfNeeded { success in
-                if success {
-                    self.syncAll(fullExport: false) {
-                        self.logMessage("✅ Network resume sync completed")
-                    }
-                } else {
-                    self.logMessage("⚠️ Token refresh failed")
-                }
+            self.syncAll(fullExport: false) {
+                self.logMessage("✅ Network resume sync completed")
             }
         }
     }
@@ -1142,6 +1066,25 @@ import Network
             .replacingOccurrences(of: "HKQuantityTypeIdentifier", with: "")
             .replacingOccurrences(of: "HKCategoryTypeIdentifier", with: "")
             .replacingOccurrences(of: "HKWorkoutType", with: "Workout")
+    }
+}
+
+// MARK: - Auth Error Stream Handler
+class AuthErrorStreamHandler: NSObject, FlutterStreamHandler {
+    weak var plugin: OpenWearablesHealthSdkPlugin?
+    
+    init(plugin: OpenWearablesHealthSdkPlugin) {
+        self.plugin = plugin
+    }
+    
+    func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+        plugin?.authErrorEventSink = events
+        return nil
+    }
+    
+    func onCancel(withArguments arguments: Any?) -> FlutterError? {
+        plugin?.authErrorEventSink = nil
+        return nil
     }
 }
 
