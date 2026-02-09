@@ -39,18 +39,14 @@ class MethodChannelOpenWearablesHealthSdk extends OpenWearablesHealthSdkPlatform
     required String userId,
     String? accessToken,
     String? refreshToken,
-    String? appId,
-    String? appSecret,
-    String? baseUrl,
+    String? apiKey,
   }) async {
     try {
       await _channel.invokeMethod<void>('signIn', {
         'userId': userId,
         if (accessToken != null) 'accessToken': accessToken,
         if (refreshToken != null) 'refreshToken': refreshToken,
-        if (appId != null) 'appId': appId,
-        if (appSecret != null) 'appSecret': appSecret,
-        if (baseUrl != null) 'baseUrl': baseUrl,
+        if (apiKey != null) 'apiKey': apiKey,
       });
     } on PlatformException catch (e) {
       throw SignInException(e.message ?? 'Sign-in failed', statusCode: int.tryParse(e.code));
@@ -60,6 +56,17 @@ class MethodChannelOpenWearablesHealthSdk extends OpenWearablesHealthSdkPlatform
   @override
   Future<void> signOut() async {
     await _channel.invokeMethod<void>('signOut');
+  }
+
+  @override
+  Future<void> updateTokens({
+    required String accessToken,
+    String? refreshToken,
+  }) async {
+    await _channel.invokeMethod<void>('updateTokens', {
+      'accessToken': accessToken,
+      if (refreshToken != null) 'refreshToken': refreshToken,
+    });
   }
 
   @override

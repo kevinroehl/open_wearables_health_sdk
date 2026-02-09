@@ -32,7 +32,7 @@ extension OpenWearablesHealthSdkPlugin {
         type: HKSampleType,
         candidateAnchor: HKQueryAnchor?,
         endpoint: URL,
-        token: String,
+        credential: String,
         completion: @escaping ()->Void
     ) {
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else { 
@@ -71,7 +71,7 @@ extension OpenWearablesHealthSdkPlugin {
         var req = URLRequest(url: endpoint)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue(token, forHTTPHeaderField: "Authorization")
+        applyAuth(to: &req, credential: credential)
 
         let task = session.uploadTask(with: req, fromFile: payloadURL)
         task.taskDescription = [itemURL.path, payloadURL.path, anchorURL?.path ?? ""].joined(separator: "|")
@@ -85,7 +85,7 @@ extension OpenWearablesHealthSdkPlugin {
         payload: [String: Any],
         anchors: [String: HKQueryAnchor],
         endpoint: URL,
-        token: String,
+        credential: String,
         wasFullExport: Bool = false,
         completion: @escaping (Bool)->Void
     ) {
@@ -143,7 +143,7 @@ extension OpenWearablesHealthSdkPlugin {
         var req = URLRequest(url: endpoint)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue(token, forHTTPHeaderField: "Authorization")
+        applyAuth(to: &req, credential: credential)
         req.httpBody = payloadData
         req.setValue("\(payloadData.count)", forHTTPHeaderField: "Content-Length")
         
@@ -177,51 +177,15 @@ extension OpenWearablesHealthSdkPlugin {
                     try? FileManager.default.removeItem(atPath: payloadURL.path)
                     completion(true)
                 } else if httpResponse.statusCode == 401 {
-                    // Unauthorized - try to refresh the token
-                    self.attemptTokenRefresh { [weak self] refreshSuccess in
-                        guard let self = self else { return }
-                        
-                        if refreshSuccess, let newToken = self.accessToken {
-                            self.logMessage("🔄 Retrying upload with refreshed token...")
-                            // Retry the upload with the new token
-                            var retryReq = URLRequest(url: endpoint)
-                            retryReq.httpMethod = "POST"
-                            retryReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                            retryReq.setValue(newToken, forHTTPHeaderField: "Authorization")
-                            retryReq.httpBody = payloadData
-                            retryReq.setValue("\(payloadData.count)", forHTTPHeaderField: "Content-Length")
-                            
-                            let retryTask = self.foregroundSession.dataTask(with: retryReq) { [weak self] retryData, retryResponse, retryError in
-                                guard let self = self else { return }
-                                
-                                if let retryError = retryError {
-                                    self.logMessage("❌ Retry upload error: \(retryError.localizedDescription)")
-                                    try? FileManager.default.removeItem(atPath: payloadURL.path)
-                                    completion(false)
-                                    return
-                                }
-                                
-                                if let retryHttp = retryResponse as? HTTPURLResponse, (200...299).contains(retryHttp.statusCode) {
-                                    self.logMessage("✅ Retry HTTP \(retryHttp.statusCode)")
-                                    self.handleSuccessfulUpload(itemPath: itemURL.path, anchorPath: anchorsURL?.path, wasFullExport: wasFullExport)
-                                    try? FileManager.default.removeItem(atPath: payloadURL.path)
-                                    completion(true)
-                                } else {
-                                    let retryStatus = (retryResponse as? HTTPURLResponse)?.statusCode ?? 0
-                                    self.logMessage("❌ Retry failed: HTTP \(retryStatus)")
-                                    self.emitAuthError(statusCode: 401)
-                                    try? FileManager.default.removeItem(atPath: payloadURL.path)
-                                    completion(false)
-                                }
-                            }
-                            retryTask.resume()
-                        } else {
-                            // Refresh failed - emit auth error
-                            self.emitAuthError(statusCode: 401)
-                            try? FileManager.default.removeItem(atPath: payloadURL.path)
-                            completion(false)
-                        }
-                    }
+                    self.handle401ForUpload(
+                        payloadData: payloadData,
+                        endpoint: endpoint,
+                        itemPath: itemURL.path,
+                        payloadPath: payloadURL.path,
+                        anchorsPath: anchorsURL?.path,
+                        wasFullExport: wasFullExport,
+                        completion: completion
+                    )
                 } else {
                     // Log error response body for debugging
                     var errorMsg = "❌ HTTP \(httpResponse.statusCode)"
@@ -243,6 +207,85 @@ extension OpenWearablesHealthSdkPlugin {
         }
         
         task.resume()
+    }
+    
+    /// Handles 401 response for combined uploads.
+    ///
+    /// - Custom sync URL: always emits auth error immediately (different backend,
+    ///   SDK cannot refresh). Developer must call `updateTokens()` from Flutter.
+    /// - Standard URL + token mode: attempts automatic token refresh and retry.
+    /// - Standard URL + API key mode: emits auth error (API keys don't auto-refresh).
+    private func handle401ForUpload(
+        payloadData: Data,
+        endpoint: URL,
+        itemPath: String,
+        payloadPath: String,
+        anchorsPath: String?,
+        wasFullExport: Bool,
+        completion: @escaping (Bool)->Void
+    ) {
+        // Custom sync URL → never auto-refresh, it's a different backend.
+        // Developer handles it via authErrorStream + updateTokens().
+        if customSyncUrl != nil {
+            self.logMessage("🔒 401 with custom sync URL - emitting auth error (call updateTokens to continue)")
+            self.emitAuthError(statusCode: 401)
+            try? FileManager.default.removeItem(atPath: payloadPath)
+            completion(false)
+            return
+        }
+        
+        // Standard URL + API key → no auto-refresh for API keys.
+        if isApiKeyAuth {
+            self.logMessage("🔒 401 with API key - emitting auth error")
+            self.emitAuthError(statusCode: 401)
+            try? FileManager.default.removeItem(atPath: payloadPath)
+            completion(false)
+            return
+        }
+        
+        // Standard URL + token mode → attempt automatic refresh
+        self.attemptTokenRefresh { [weak self] refreshSuccess in
+            guard let self = self else { return }
+            
+            if refreshSuccess, let newCredential = self.authCredential {
+                self.logMessage("🔄 Retrying upload with refreshed token...")
+                var retryReq = URLRequest(url: endpoint)
+                retryReq.httpMethod = "POST"
+                retryReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                self.applyAuth(to: &retryReq, credential: newCredential)
+                retryReq.httpBody = payloadData
+                retryReq.setValue("\(payloadData.count)", forHTTPHeaderField: "Content-Length")
+                
+                let retryTask = self.foregroundSession.dataTask(with: retryReq) { [weak self] retryData, retryResponse, retryError in
+                    guard let self = self else { return }
+                    
+                    if let retryError = retryError {
+                        self.logMessage("❌ Retry upload error: \(retryError.localizedDescription)")
+                        try? FileManager.default.removeItem(atPath: payloadPath)
+                        completion(false)
+                        return
+                    }
+                    
+                    if let retryHttp = retryResponse as? HTTPURLResponse, (200...299).contains(retryHttp.statusCode) {
+                        self.logMessage("✅ Retry HTTP \(retryHttp.statusCode)")
+                        self.handleSuccessfulUpload(itemPath: itemPath, anchorPath: anchorsPath, wasFullExport: wasFullExport)
+                        try? FileManager.default.removeItem(atPath: payloadPath)
+                        completion(true)
+                    } else {
+                        let retryStatus = (retryResponse as? HTTPURLResponse)?.statusCode ?? 0
+                        self.logMessage("❌ Retry failed: HTTP \(retryStatus)")
+                        self.emitAuthError(statusCode: 401)
+                        try? FileManager.default.removeItem(atPath: payloadPath)
+                        completion(false)
+                    }
+                }
+                retryTask.resume()
+            } else {
+                self.emitAuthError(statusCode: 401)
+                try? FileManager.default.removeItem(atPath: payloadPath)
+                completion(false)
+            }
+        }
     }
     
     // MARK: - Handle successful upload
@@ -294,7 +337,7 @@ extension OpenWearablesHealthSdkPlugin {
 
     // MARK: - Retry pending items
     internal func retryOutboxIfPossible() {
-        guard let endpoint = self.syncEndpoint, let token = self.accessToken else { return }
+        guard let endpoint = self.syncEndpoint, let credential = self.authCredential else { return }
         let dir = outboxDir()
         guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
         
@@ -316,7 +359,7 @@ extension OpenWearablesHealthSdkPlugin {
             var req = URLRequest(url: endpoint)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.setValue(token, forHTTPHeaderField: "Authorization")
+            applyAuth(to: &req, credential: credential)
             req.httpBody = payloadData
             req.setValue("\(payloadData.count)", forHTTPHeaderField: "Content-Length")
 
@@ -344,7 +387,7 @@ extension OpenWearablesHealthSdkPlugin {
             var req = URLRequest(url: endpoint)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.setValue(token, forHTTPHeaderField: "Authorization")
+            applyAuth(to: &req, credential: credential)
             req.httpBody = payloadData
             req.setValue("\(payloadData.count)", forHTTPHeaderField: "Content-Length")
 

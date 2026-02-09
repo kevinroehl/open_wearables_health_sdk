@@ -199,13 +199,10 @@ print('Connected: ${user.userId}');
 print('Failed: ${e.message}');
 }
 
-// With automatic token refresh (optional):
+// Or with API key (simpler, no automatic token refresh):
 final user = await OpenWearablesHealthSdk.signIn(
-userId: response['userId'],
-accessToken: response['accessToken'],
-appId: 'your-app-id',
-appSecret: 'your-app-secret',
-baseUrl: 'https://api.openwearables.io',
+userId: 'your-user-id',
+apiKey: 'your-api-key',
 );
 ```
 
@@ -282,13 +279,11 @@ class HealthService {
       // Get credentials from your backend
       final response = await _api.post('/health/connect');
 
-      // Sign in with SDK (with optional auto-refresh)
+      // Sign in with SDK (token mode with auto-refresh)
       await OpenWearablesHealthSdk.signIn(
          userId: response['userId'],
          accessToken: response['accessToken'],
-         appId: response['appId'],       // optional, for token refresh
-         appSecret: response['appSecret'], // optional, for token refresh
-         baseUrl: response['baseUrl'],    // optional, for token refresh
+         refreshToken: response['refreshToken'],
       );
    }
 
@@ -341,8 +336,9 @@ class HealthService {
 | Method | Description |
 |--------|-------------|
 | `configure({environment, customSyncUrl})` | Initialize SDK and restore session |
-| `signIn({userId, accessToken, appId?, appSecret?, baseUrl?})` | Sign in with credentials from backend |
+| `signIn({userId, accessToken?, refreshToken?, apiKey?})` | Sign in with tokens or API key |
 | `signOut()` | Sign out and clear all credentials |
+| `updateTokens({accessToken, refreshToken?})` | Update tokens without re-signing in |
 | `requestAuthorization({types})` | Request health data permissions |
 | `startBackgroundSync()` | Enable background sync |
 | `stopBackgroundSync()` | Disable background sync |

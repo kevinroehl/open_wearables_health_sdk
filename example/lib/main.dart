@@ -142,14 +142,17 @@ class _HomePageState extends State<HomePage> {
     try {
       final credentials = await OpenWearablesHealthSdk.getStoredCredentials();
       final hasUserId = credentials['userId'] != null && (credentials['userId'] as String).isNotEmpty;
-      final hasAccessToken = credentials['accessToken'] != null && (credentials['accessToken'] as String).isNotEmpty;
+      final hasAccessToken = (credentials['accessToken'] != null && (credentials['accessToken'] as String).isNotEmpty) ||
+          (credentials['apiKey'] != null && (credentials['apiKey'] as String).isNotEmpty);
       final wasSyncActive = credentials['isSyncActive'] == true;
 
       setState(() {
         if (credentials['userId'] != null) {
           _userIdController.text = credentials['userId'] as String;
         }
-        if (credentials['accessToken'] != null) {
+        if (credentials['apiKey'] != null) {
+          _tokenController.text = credentials['apiKey'] as String;
+        } else if (credentials['accessToken'] != null) {
           _tokenController.text = credentials['accessToken'] as String;
         }
       });
@@ -200,8 +203,7 @@ class _HomePageState extends State<HomePage> {
       _checkStatus();
 
       _setStatus('Signing in...');
-      final authToken = token.startsWith('Bearer ') ? token : 'Bearer $token';
-      await OpenWearablesHealthSdk.signIn(userId: userId, accessToken: authToken);
+      await OpenWearablesHealthSdk.signIn(userId: userId, apiKey: token);
 
       _setStatus('Connected successfully');
       _checkStatus();

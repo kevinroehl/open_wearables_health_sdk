@@ -14,11 +14,48 @@ import Network
     internal var userId: String? { OpenWearablesHealthSdkKeychain.getUserId() }
     internal var accessToken: String? { OpenWearablesHealthSdkKeychain.getAccessToken() }
     internal var refreshToken: String? { OpenWearablesHealthSdkKeychain.getRefreshToken() }
+    internal var apiKey: String? { OpenWearablesHealthSdkKeychain.getApiKey() }
     
     // Token refresh state (to avoid concurrent refreshes)
     private var isRefreshingToken = false
     private let tokenRefreshLock = NSLock()
     private var tokenRefreshCallbacks: [(Bool) -> Void] = []
+    
+    // MARK: - Auth Helpers
+    
+    /// Whether the SDK is using API key authentication (vs token-based).
+    internal var isApiKeyAuth: Bool {
+        return apiKey != nil && accessToken == nil
+    }
+    
+    /// Returns the current auth credential (accessToken or apiKey), whichever is active.
+    internal var authCredential: String? {
+        return accessToken ?? apiKey
+    }
+    
+    /// Returns true if the user has any valid auth credential.
+    internal var hasAuth: Bool {
+        return authCredential != nil
+    }
+    
+    /// Applies the correct auth header to a URLRequest based on the current auth mode.
+    internal func applyAuth(to request: inout URLRequest) {
+        if let token = accessToken {
+            request.setValue(token, forHTTPHeaderField: "Authorization")
+        } else if let key = apiKey {
+            request.setValue(key, forHTTPHeaderField: "X-Open-Wearables-API-Key")
+        }
+    }
+    
+    /// Applies the correct auth header using an explicit credential string.
+    /// Uses API key header if in API key mode, otherwise Authorization header.
+    internal func applyAuth(to request: inout URLRequest, credential: String) {
+        if isApiKeyAuth {
+            request.setValue(credential, forHTTPHeaderField: "X-Open-Wearables-API-Key")
+        } else {
+            request.setValue(credential, forHTTPHeaderField: "Authorization")
+        }
+    }
     
     // MARK: - HealthKit State
     internal let healthStore = HKHealthStore()
@@ -159,11 +196,15 @@ import Network
         case "isSyncActive":
             result(OpenWearablesHealthSdkKeychain.isSyncActive())
             
+        case "updateTokens":
+            handleUpdateTokens(call: call, result: result)
+            
         case "getStoredCredentials":
             let credentials: [String: Any?] = [
                 "userId": OpenWearablesHealthSdkKeychain.getUserId(),
                 "accessToken": OpenWearablesHealthSdkKeychain.getAccessToken(),
                 "refreshToken": OpenWearablesHealthSdkKeychain.getRefreshToken(),
+                "apiKey": OpenWearablesHealthSdkKeychain.getApiKey(),
                 "customSyncUrl": OpenWearablesHealthSdkKeychain.getCustomSyncUrl(),
                 "isSyncActive": OpenWearablesHealthSdkKeychain.isSyncActive()
             ]
@@ -192,7 +233,7 @@ import Network
             self.clearOutbox()
             logMessage("🔄 Anchors reset - will perform full sync on next sync")
             // If sync is active, trigger a new full sync
-            if OpenWearablesHealthSdkKeychain.isSyncActive() && self.accessToken != nil {
+            if OpenWearablesHealthSdkKeychain.isSyncActive() && self.hasAuth {
                 logMessage("🔄 Triggering full export after reset...")
                 self.syncAll(fullExport: true) {
                     self.logMessage("✅ Full export after reset completed")
@@ -279,7 +320,7 @@ import Network
     
     // MARK: - Auto Restore Sync
     private func autoRestoreSync() {
-        guard userId != nil, accessToken != nil else {
+        guard userId != nil, hasAuth else {
             logMessage("⚠️ Cannot auto-restore: no session")
             return
         }
@@ -300,7 +341,7 @@ import Network
         logMessage("✅ Background sync auto-restored")
     }
     
-    // MARK: - Sign In (with tokens or app credentials)
+    // MARK: - Sign In (with tokens or API key)
     private func handleSignIn(call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let args = call.arguments as? [String: Any],
               let userId = args["userId"] as? String else {
@@ -310,30 +351,48 @@ import Network
         
         let accessToken = args["accessToken"] as? String
         let refreshToken = args["refreshToken"] as? String
-        let appId = args["appId"] as? String
-        let appSecret = args["appSecret"] as? String
-        let baseUrl = args["baseUrl"] as? String
+        let apiKey = args["apiKey"] as? String
         
         let hasTokens = accessToken != nil && refreshToken != nil
-        let hasAppCredentials = appId != nil && appSecret != nil
+        let hasApiKey = apiKey != nil
         
-        guard hasTokens || hasAppCredentials else {
-            result(FlutterError(code: "bad_args", message: "Provide (accessToken + refreshToken) or (appId + appSecret)", details: nil))
+        guard hasTokens || hasApiKey else {
+            result(FlutterError(code: "bad_args", message: "Provide (accessToken + refreshToken) or (apiKey)", details: nil))
             return
         }
         
-        // Save user ID always
+        // Save user ID and tokens
         OpenWearablesHealthSdkKeychain.saveCredentials(userId: userId, accessToken: accessToken, refreshToken: refreshToken)
         
-        // Save app credentials if provided
-        if let appId = appId, let appSecret = appSecret, let baseUrl = baseUrl {
-            OpenWearablesHealthSdkKeychain.saveAppCredentials(appId: appId, appSecret: appSecret, baseUrl: baseUrl)
-            logMessage("✅ App credentials saved")
+        // Save API key if provided
+        if let apiKey = apiKey {
+            OpenWearablesHealthSdkKeychain.saveApiKey(apiKey)
+            logMessage("✅ API key saved")
         }
         
-        logMessage("✅ Signed in: userId=\(userId)")
+        let authMode = hasTokens ? "token" : "apiKey"
+        logMessage("✅ Signed in: userId=\(userId), mode=\(authMode)")
         
         // Retry pending outbox items
+        self.retryOutboxIfPossible()
+        
+        result(nil)
+    }
+    
+    // MARK: - Update Tokens
+    private func handleUpdateTokens(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let args = call.arguments as? [String: Any],
+              let accessToken = args["accessToken"] as? String else {
+            result(FlutterError(code: "bad_args", message: "Missing accessToken", details: nil))
+            return
+        }
+        
+        let refreshToken = args["refreshToken"] as? String
+        
+        OpenWearablesHealthSdkKeychain.updateTokens(accessToken: accessToken, refreshToken: refreshToken)
+        logMessage("🔄 Tokens updated from Flutter")
+        
+        // Retry any pending outbox items with the new token
         self.retryOutboxIfPossible()
         
         result(nil)
@@ -400,7 +459,7 @@ import Network
     
     // MARK: - Start Background Sync
     private func handleStartBackgroundSync(result: @escaping FlutterResult) {
-        guard userId != nil, accessToken != nil else {
+        guard userId != nil, hasAuth else {
             result(FlutterError(code: "not_signed_in", message: "Not signed in", details: nil))
             return
         }
@@ -422,7 +481,7 @@ import Network
         
         let canStart = HKHealthStore.isHealthDataAvailable() &&
                       self.syncEndpoint != nil &&
-                      self.accessToken != nil &&
+                      self.hasAuth &&
                       !self.trackedTypes.isEmpty
         
         // Save sync active state for restoration after restart
@@ -433,9 +492,9 @@ import Network
         result(canStart)
     }
     
-    // MARK: - Get Access Token
-    internal func getAccessToken() -> String? {
-        return accessToken
+    // MARK: - Get Auth Credential
+    internal func getAuthCredential() -> String? {
+        return authCredential
     }
     
     // MARK: - Helper: Get queryable types (filtering unsupported correlations)
@@ -473,8 +532,8 @@ import Network
     internal func syncAll(fullExport: Bool, completion: @escaping ()->Void) {
         guard !trackedTypes.isEmpty else { completion(); return }
         
-        guard self.accessToken != nil else {
-            self.logMessage("❌ No access token for sync")
+        guard self.hasAuth else {
+            self.logMessage("❌ No auth credential for sync")
             completion()
             return
         }
@@ -537,8 +596,8 @@ import Network
             return
         }
         
-        guard let token = self.accessToken, let endpoint = self.syncEndpoint else {
-            logMessage("❌ No token or endpoint")
+        guard let credential = self.authCredential, let endpoint = self.syncEndpoint else {
+            logMessage("❌ No auth credential or endpoint")
             finishSync()
             completion()
             return
@@ -572,7 +631,7 @@ import Network
             typeIndex: startIndex,
             fullExport: fullExport,
             endpoint: endpoint,
-            token: token,
+            credential: credential,
             isBackground: isBackground
         ) { [weak self] in
             self?.finalizeSyncState()
@@ -587,7 +646,7 @@ import Network
         typeIndex: Int,
         fullExport: Bool,
         endpoint: URL,
-        token: String,
+        credential: String,
         isBackground: Bool,
         completion: @escaping ()->Void
     ) {
@@ -617,7 +676,7 @@ import Network
                 typeIndex: typeIndex + 1,
                 fullExport: fullExport,
                 endpoint: endpoint,
-                token: token,
+                credential: credential,
                 isBackground: isBackground,
                 completion: completion
             )
@@ -632,7 +691,7 @@ import Network
             type: type,
             fullExport: fullExport,
             endpoint: endpoint,
-            token: token,
+            credential: credential,
             chunkLimit: isBackground ? backgroundChunkSize : recordsPerChunk
         ) { [weak self] success in
             guard let self = self else {
@@ -647,7 +706,7 @@ import Network
                     typeIndex: typeIndex + 1,
                     fullExport: fullExport,
                     endpoint: endpoint,
-                    token: token,
+                    credential: credential,
                     isBackground: isBackground,
                     completion: completion
                 )
@@ -665,7 +724,7 @@ import Network
         type: HKSampleType,
         fullExport: Bool,
         endpoint: URL,
-        token: String,
+        credential: String,
         chunkLimit: Int,
         completion: @escaping (Bool)->Void
     ) {
@@ -732,7 +791,7 @@ import Network
                     anchorData: anchorData,
                     isLastChunk: isLastChunk,
                     endpoint: endpoint,
-                    token: token
+                    credential: credential
                 ) { [weak self] success in
                     guard let self = self else {
                         completion(false)
@@ -749,7 +808,7 @@ import Network
                                 type: type,
                                 anchor: newAnchor,
                                 endpoint: endpoint,
-                                token: token,
+                                credential: credential,
                                 chunkLimit: chunkLimit,
                                 completion: completion
                             )
@@ -770,7 +829,7 @@ import Network
         type: HKSampleType,
         anchor: HKQueryAnchor?,
         endpoint: URL,
-        token: String,
+        credential: String,
         chunkLimit: Int,
         completion: @escaping (Bool)->Void
     ) {
@@ -825,7 +884,7 @@ import Network
                     anchorData: anchorData,
                     isLastChunk: isLastChunk,
                     endpoint: endpoint,
-                    token: token
+                    credential: credential
                 ) { [weak self] success in
                     guard let self = self else {
                         completion(false)
@@ -840,7 +899,7 @@ import Network
                                 type: type,
                                 anchor: newAnchor,
                                 endpoint: endpoint,
-                                token: token,
+                                credential: credential,
                                 chunkLimit: chunkLimit,
                                 completion: completion
                             )
@@ -863,14 +922,14 @@ import Network
         anchorData: Data?,
         isLastChunk: Bool,
         endpoint: URL,
-        token: String,
+        credential: String,
         completion: @escaping (Bool)->Void
     ) {
         enqueueCombinedUpload(
             payload: payload,
             anchors: [:],  // We handle anchors separately now
             endpoint: endpoint,
-            token: token,
+            credential: credential,
             wasFullExport: false
         ) { [weak self] success in
             guard let self = self else {
@@ -955,13 +1014,13 @@ import Network
             let samples = samplesOrNil ?? []
             guard !samples.isEmpty else { completion(); return }
             
-            guard let token = self.accessToken, let endpoint = self.syncEndpoint else { 
+            guard let credential = self.authCredential, let endpoint = self.syncEndpoint else { 
                 completion()
                 return 
             }
 
             let payload = self.serialize(samples: samples, type: type)
-            self.enqueueBackgroundUpload(payload: payload, type: type, candidateAnchor: newAnchor, endpoint: endpoint, token: token) {
+            self.enqueueBackgroundUpload(payload: payload, type: type, candidateAnchor: newAnchor, endpoint: endpoint, credential: credential) {
                 if samples.count == self.chunkSize {
                     self.syncType(type, fullExport: false, completion: completion)
                 } else {

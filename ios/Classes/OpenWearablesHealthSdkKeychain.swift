@@ -11,8 +11,7 @@ internal class OpenWearablesHealthSdkKeychain {
     private static let accessTokenKey = "accessToken"
     private static let refreshTokenKey = "refreshToken"
     private static let userIdKey = "userId"
-    private static let appIdKey = "appId"
-    private static let appSecretKey = "appSecret"
+    private static let apiKeyKey = "apiKey"
     private static let baseUrlKey = "baseUrl"
     private static let customSyncUrlKey = "customSyncUrl"
     private static let syncActiveKey = "syncActive"
@@ -77,7 +76,8 @@ internal class OpenWearablesHealthSdkKeychain {
     }
     
     static func hasSession() -> Bool {
-        return getAccessToken() != nil && getUserId() != nil
+        guard getUserId() != nil else { return false }
+        return getAccessToken() != nil || getApiKey() != nil
     }
     
     // MARK: - Custom Sync URL (stored in UserDefaults, not sensitive)
@@ -117,25 +117,14 @@ internal class OpenWearablesHealthSdkKeychain {
         return defaults.stringArray(forKey: trackedTypesKey)
     }
     
-    // MARK: - App Credentials (for local testing / custom configurations)
+    // MARK: - API Key (alternative auth mode)
     
-    static func saveAppCredentials(appId: String, appSecret: String, baseUrl: String) {
-        save(key: appIdKey, value: appId)
-        save(key: appSecretKey, value: appSecret)
-        defaults.set(baseUrl, forKey: baseUrlKey)
-        defaults.synchronize()
+    static func saveApiKey(_ apiKey: String) {
+        save(key: apiKeyKey, value: apiKey)
     }
     
-    static func getAppId() -> String? {
-        return load(key: appIdKey)
-    }
-    
-    static func getAppSecret() -> String? {
-        return load(key: appSecretKey)
-    }
-    
-    static func getBaseUrl() -> String? {
-        return defaults.string(forKey: baseUrlKey)
+    static func getApiKey() -> String? {
+        return load(key: apiKeyKey)
     }
     
     // MARK: - Clear
@@ -144,9 +133,7 @@ internal class OpenWearablesHealthSdkKeychain {
         delete(key: accessTokenKey)
         delete(key: refreshTokenKey)
         delete(key: userIdKey)
-        delete(key: appIdKey)
-        delete(key: appSecretKey)
-        defaults.removeObject(forKey: baseUrlKey)
+        delete(key: apiKeyKey)
         defaults.removeObject(forKey: customSyncUrlKey)
         defaults.removeObject(forKey: syncActiveKey)
         defaults.removeObject(forKey: trackedTypesKey)

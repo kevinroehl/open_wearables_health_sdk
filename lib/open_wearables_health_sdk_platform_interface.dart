@@ -33,18 +33,16 @@ abstract class OpenWearablesHealthSdkPlatform extends PlatformInterface {
   /// The SDK will use these tokens directly for API calls and will
   /// automatically refresh the access token on 401 errors.
   ///
-  /// **Mode 2: App credentials** — pass [appId], [appSecret], and [baseUrl].
-  /// Used for local testing or custom backend configurations.
+  /// **Mode 2: API key** — pass [apiKey].
+  /// The SDK will send `X-Open-Wearables-API-Key` header with each request.
+  /// On 401, emits an auth error event (no automatic refresh for API keys).
   ///
-  /// You must provide either (accessToken + refreshToken) or
-  /// (appId + appSecret). Passing both is also allowed.
+  /// You must provide either (accessToken + refreshToken) or (apiKey).
   Future<void> signIn({
     required String userId,
     String? accessToken,
     String? refreshToken,
-    String? appId,
-    String? appSecret,
-    String? baseUrl,
+    String? apiKey,
   }) {
     throw UnimplementedError('signIn() has not been implemented.');
   }
@@ -52,6 +50,18 @@ abstract class OpenWearablesHealthSdkPlatform extends PlatformInterface {
   /// Signs out the current user and clears all tokens from secure storage.
   Future<void> signOut() {
     throw UnimplementedError('signOut() has not been implemented.');
+  }
+
+  /// Updates the access token (and optionally refresh token) for the current session.
+  ///
+  /// Use this after receiving an auth error event when using a custom sync URL
+  /// or when your backend provides new tokens. The SDK will automatically
+  /// retry any pending uploads with the new credential.
+  Future<void> updateTokens({
+    required String accessToken,
+    String? refreshToken,
+  }) {
+    throw UnimplementedError('updateTokens() has not been implemented.');
   }
 
   /// Restores session from secure storage if available.

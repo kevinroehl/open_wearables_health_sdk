@@ -149,22 +149,20 @@ class OpenWearablesHealthSdk {
   /// );
   /// ```
   ///
-  /// ## Mode 2: App credentials (appId + appSecret)
+  /// ## Mode 2: API key (apiKey)
   ///
-  /// Pass [appId], [appSecret], and [baseUrl] for local testing or custom
-  /// backend configurations.
+  /// Pass [apiKey] for simple authentication using the
+  /// `X-Open-Wearables-API-Key` header. On 401, the SDK emits an auth
+  /// error event (no automatic token refresh for API keys).
   ///
   /// ```dart
   /// final user = await OpenWearablesHealthSdk.signIn(
   ///   userId: 'test-user',
-  ///   appId: 'your-app-id',
-  ///   appSecret: 'your-app-secret',
-  ///   baseUrl: 'http://localhost:3000',
+  ///   apiKey: 'your-api-key',
   /// );
   /// ```
   ///
-  /// You must provide either (accessToken + refreshToken) or
-  /// (appId + appSecret). Passing both is also allowed.
+  /// You must provide either (accessToken + refreshToken) or (apiKey).
   ///
   /// Throws [NotConfiguredException] if [configure] was not called.
   /// Throws [SignInException] if sign-in fails.
@@ -173,26 +171,22 @@ class OpenWearablesHealthSdk {
     required String userId,
     String? accessToken,
     String? refreshToken,
-    String? appId,
-    String? appSecret,
-    String? baseUrl,
+    String? apiKey,
   }) async {
     if (_config == null) throw const NotConfiguredException();
 
     final hasTokens = accessToken != null && refreshToken != null;
-    final hasAppCredentials = appId != null && appSecret != null;
+    final hasApiKey = apiKey != null;
 
-    if (!hasTokens && !hasAppCredentials) {
-      throw ArgumentError('You must provide either (accessToken + refreshToken) or (appId + appSecret).');
+    if (!hasTokens && !hasApiKey) {
+      throw ArgumentError('You must provide either (accessToken + refreshToken) or (apiKey).');
     }
 
     await _platform.signIn(
       userId: userId,
       accessToken: accessToken,
       refreshToken: refreshToken,
-      appId: appId,
-      appSecret: appSecret,
-      baseUrl: baseUrl,
+      apiKey: apiKey,
     );
 
     _currentUser = OpenWearablesHealthSdkUser(userId: userId);
@@ -215,6 +209,42 @@ class OpenWearablesHealthSdk {
       _currentUser = null;
       _isSyncActive = false;
     }
+  }
+
+  /// Updates the access token (and optionally the refresh token) for the
+  /// current session without signing out and back in.
+  ///
+  /// Use this when:
+  /// - You receive an auth error event while using a custom sync URL
+  ///   and need to inject new tokens obtained from your own backend.
+  /// - Your backend provides rotated tokens that you want to push
+  ///   into the SDK.
+  ///
+  /// After updating, the SDK will automatically retry any pending
+  /// uploads with the new credential.
+  ///
+  /// ```dart
+  /// // Listen for auth errors (e.g., from custom sync URL)
+  /// MethodChannelOpenWearablesHealthSdk.authErrorStream.listen((error) async {
+  ///   final newTokens = await myBackend.refreshTokens();
+  ///   await OpenWearablesHealthSdk.updateTokens(
+  ///     accessToken: newTokens['accessToken'],
+  ///     refreshToken: newTokens['refreshToken'],
+  ///   );
+  /// });
+  /// ```
+  ///
+  /// Throws [NotConfiguredException] if [configure] was not called.
+  /// Throws [NotSignedInException] if no user is signed in.
+  static Future<void> updateTokens({
+    required String accessToken,
+    String? refreshToken,
+  }) async {
+    _ensureSignedIn();
+    await _platform.updateTokens(
+      accessToken: accessToken,
+      refreshToken: refreshToken,
+    );
   }
 
   // MARK: - Health Data Authorization
@@ -286,7 +316,8 @@ class OpenWearablesHealthSdk {
 
   /// Returns stored credentials for debugging/display purposes.
   ///
-  /// Returns a map with keys: userId, accessToken, customSyncUrl, isSyncActive.
+  /// Returns a map with keys: userId, accessToken, refreshToken, apiKey,
+  /// customSyncUrl, isSyncActive.
   /// String values may be null if not stored. isSyncActive is a bool.
   static Future<Map<String, dynamic>> getStoredCredentials() async {
     return _platform.getStoredCredentials();
